@@ -217,6 +217,87 @@ const MAX_STORED_STATUSES = 100;
 const MAX_DELETED_STATUSES = 50;
 
 // ═══════════════════════════════════════════════════════════
+// 📇 BASE DE DONNÉES DES CONTACTS (Noms + Numéros réels)
+// ═══════════════════════════════════════════════════════════
+
+// Structure pour stocker TOUS les contacts rencontrés
+const contactsDB = new Map();  // numéro -> { name, jid, firstSeen, lastSeen, ... }
+
+// Ajouter ou mettre à jour un contact
+function updateContact(jid, pushName, additionalData = {}) {
+  if (!jid) return null;
+  
+  const number = jid.split("@")[0];
+  if (!number || number.length < 8) return null;
+  
+  // Vérifier si c'est un vrai numéro (pas un ID de groupe)
+  if (jid.endsWith("@g.us") || jid.includes("-")) return null;
+  
+  const now = new Date().toLocaleString("fr-FR");
+  
+  if (!contactsDB.has(number)) {
+    // Nouveau contact
+    contactsDB.set(number, {
+      jid: jid,
+      number: number,
+      name: pushName || "Inconnu",
+      formattedNumber: formatPhoneNumber(number),
+      firstSeen: now,
+      lastSeen: now,
+      messageCount: 0,
+      isBlocked: false,
+      notes: "",
+      ...additionalData
+    });
+    console.log(`📇 Nouveau contact: ${pushName || number} (${formatPhoneNumber(number)})`);
+  } else {
+    // Contact existant - mise à jour
+    const contact = contactsDB.get(number);
+    if (pushName && pushName.length > 1 && pushName !== "Inconnu") {
+      contact.name = pushName;
+    }
+    contact.lastSeen = now;
+    contact.messageCount++;
+    // Fusionner les données additionnelles
+    Object.assign(contact, additionalData);
+  }
+  
+  return contactsDB.get(number);
+}
+
+// Récupérer un contact par numéro
+function getContact(numberOrJid) {
+  const number = numberOrJid?.split("@")[0]?.replace(/[^0-9]/g, "");
+  return contactsDB.get(number) || null;
+}
+
+// Récupérer le nom d'un contact
+function getContactName(numberOrJid) {
+  const contact = getContact(numberOrJid);
+  if (contact && contact.name && contact.name !== "Inconnu") {
+    return contact.name;
+  }
+  // Fallback: numéro formaté
+  const number = numberOrJid?.split("@")[0];
+  return formatPhoneNumber(number);
+}
+
+// Lister tous les contacts
+function getAllContacts() {
+  return Array.from(contactsDB.values());
+}
+
+// Rechercher un contact par nom ou numéro
+function searchContacts(query) {
+  const q = query.toLowerCase();
+  return getAllContacts().filter(c => 
+    c.name.toLowerCase().includes(q) || 
+    c.number.includes(q) ||
+    c.formattedNumber.includes(q)
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
 // 🕵️ SYSTÈME DE SURVEILLANCE / TRACKING
 // ═══════════════════════════════════════════════════════════
 
@@ -328,6 +409,33 @@ function formatNumber(number) {
   return number.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
 }
 
+// Valider si c'est un vrai numéro de téléphone (pas un ID de groupe/message)
+function isValidPhoneNumber(num) {
+  if (!num) return false;
+  const cleaned = num.replace(/[^0-9]/g, "");
+  // Un numéro valide a entre 10 et 15 chiffres
+  return cleaned.length >= 10 && cleaned.length <= 15;
+}
+
+// Cache pour stocker les noms des contacts
+const contactNamesCache = new Map();
+
+// Stocker le nom d'un contact
+function cacheContactName(jid, name) {
+  if (jid && name && name.length > 1) {
+    const num = jid.split("@")[0];
+    if (isValidPhoneNumber(num)) {
+      contactNamesCache.set(num, name);
+    }
+  }
+}
+
+// Récupérer le nom d'un contact depuis le cache
+function getCachedContactName(jid) {
+  const num = jid?.split("@")[0];
+  return contactNamesCache.get(num) || null;
+}
+
 // ═══════════════════════════════════════════════════════════
 // 🎨 MENUS ET TEXTES
 // ═══════════════════════════════════════════════════════════
@@ -388,6 +496,11 @@ function getMainMenu(prefix) {
 ┃ ${prefix}deletedstatus - Statuts supprimés
 ┃ ${prefix}getstatus [n°] - Récupérer statut
 ┃ ${prefix}liststatus - Tous les statuts
+┃ ${prefix}allstatus - Télécharger tous
+┃
+┃ 🔍 *VÉRIFICATIONS*
+┃ ${prefix}checkblock [n°] - Vérifie blocage
+┃ ${prefix}whoami - Ton numéro/statut
 ┃
 ┃ 🎮 *FUN*
 ┃ ${prefix}sticker - Créer sticker
@@ -401,7 +514,7 @@ function getMainMenu(prefix) {
 ┃ ${prefix}tts [texte] - Text to Speech
 ┃ ${prefix}tr [lang] [texte] - Traduire
 ┃
-┃ 🕵️ *ESPIONNAGE*
+┃ 🕵️ *SURVEILLANCE* (Owner)
 ┃ ${prefix}spy @user - Surveiller
 ┃ ${prefix}unspy @user - Arrêter surveillance
 ┃ ${prefix}spylist - Liste surveillés
@@ -421,7 +534,19 @@ function getMainMenu(prefix) {
 ┃ ${prefix}delsudo @user - Retirer sudo
 ┃ ${prefix}sudolist - Liste sudos
 ┃ ${prefix}broadcast [msg] - Diffuser
+┃ ${prefix}setowner [n°] - Définir owner
 ┃ ${prefix}restart - Redémarrer
+┃
+┃ 🔒 *CONFIDENTIALITÉ*
+┃ ${prefix}block [n°] - Bloquer contact
+┃ ${prefix}unblock [n°] - Débloquer
+┃ ${prefix}blocklist - Liste bloqués
+┃ ${prefix}privacy - Aide confidentialité
+┃
+┃ 📇 *BASE DE CONTACTS*
+┃ ${prefix}contacts - Voir tous
+┃ ${prefix}searchcontact [nom] - Chercher
+┃ ${prefix}contactinfo [n°] - Fiche contact
 ┃
 ╰━━━━━━━━━━━━━━━━━━━━━━━━━╯
 
@@ -447,7 +572,27 @@ async function handleCommand(hani, msg, db) {
   
   // Numéro du bot
   const botNumber = hani.user?.id?.split(":")[0] + "@s.whatsapp.net";
-  const isOwner = sender === formatNumber(config.NUMERO_OWNER) || extractNumber(sender) === config.NUMERO_OWNER;
+  const botNumberClean = hani.user?.id?.split(":")[0] || "";
+  
+  // Vérification owner avec plusieurs formats
+  const senderNumber = extractNumber(sender);
+  const ownerNumber = config.NUMERO_OWNER.replace(/[^0-9]/g, "");
+  
+  // Debug pour TOUTES les commandes owner
+  console.log(`[CMD: ${command}] Sender: ${senderNumber} | Owner: ${ownerNumber} | Bot: ${botNumberClean}`);
+  
+  // Vérification flexible: 
+  // 1. Match exact
+  // 2. L'un finit par l'autre (préfixes pays)
+  // 3. Le sender est le bot lui-même (messages dans son propre chat)
+  // 4. Le fromMe flag est true
+  const isOwner = senderNumber === ownerNumber || 
+                  senderNumber.endsWith(ownerNumber) || 
+                  ownerNumber.endsWith(senderNumber) ||
+                  senderNumber === botNumberClean ||
+                  sender === formatNumber(ownerNumber) ||
+                  msg.key.fromMe === true;
+  
   const isSudo = db.isSudo(sender) || isOwner;
   const isGroupMsg = isGroup(from);
   
@@ -502,6 +647,62 @@ async function handleCommand(hani, msg, db) {
       await send("🏓 Pong!");
       const latency = Date.now() - start;
       return send(`📶 Latence: ${latency}ms\n⚡ HANI-MD est opérationnel!`);
+    }
+
+    case "whoami": {
+      const senderNum = extractNumber(sender);
+      const ownerNum = config.NUMERO_OWNER.replace(/[^0-9]/g, "");
+      const botNum = botNumberClean;
+      
+      const info = `
+╭━━━ 🔍 *QUI SUIS-JE ?* ━━━╮
+┃
+┃ 📱 *Sender JID:*
+┃ ${sender}
+┃
+┃ 📞 *Ton numéro:*
+┃ ${senderNum}
+┃
+┃ 🤖 *Numéro du bot:*
+┃ ${botNum}
+┃
+┃ 👑 *Owner (.env):*
+┃ ${ownerNum}
+┃
+┃ 🔑 *fromMe:*
+┃ ${msg.key.fromMe ? "OUI" : "NON"}
+┃
+┃ ━━━━━━━━━━━━━━━━━━━━
+┃ ✅ *Es-tu owner ?*
+┃ ${isOwner ? "OUI ✓" : "NON ✗"}
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━╯
+
+${!isOwner ? `⚠️ *Pour te définir comme owner:*
+Modifie .env avec:
+NUMERO_OWNER=${senderNum}
+
+Ou utilise: .setowner ${senderNum}` : "✅ Tu es bien reconnu comme owner!"}
+      `.trim();
+      
+      return reply(info);
+    }
+
+    case "setowner": {
+      // Seul le bot lui-même ou fromMe peut exécuter
+      if (!msg.key.fromMe && senderNumber !== botNumberClean) {
+        return reply("❌ Seul le propriétaire du téléphone peut faire ça.");
+      }
+      
+      const newOwner = args.replace(/[^0-9]/g, "");
+      if (!newOwner || newOwner.length < 10) {
+        return reply(`❌ Numéro invalide.\n\nUtilisation: .setowner 22550252467`);
+      }
+      
+      // Mettre à jour la config en mémoire
+      config.NUMERO_OWNER = newOwner;
+      
+      return reply(`✅ Owner temporairement défini: ${newOwner}\n\n⚠️ Pour rendre permanent, modifie .env:\nNUMERO_OWNER=${newOwner}`);
     }
 
     case "menu":
@@ -1079,6 +1280,162 @@ async function handleCommand(hani, msg, db) {
       return send(list);
     }
 
+    // ────────── VÉRIFICATION BLOCAGE ──────────
+    case "checkblock":
+    case "blocked":
+    case "isblocked": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      let targetNum = args.replace(/[^0-9]/g, "");
+      
+      // Si on répond à un message, utiliser ce numéro
+      if (quotedMsg && msg.message?.extendedTextMessage?.contextInfo?.participant) {
+        targetNum = msg.message.extendedTextMessage.contextInfo.participant.split("@")[0];
+      }
+      
+      if (!targetNum || targetNum.length < 10) {
+        return send(`❌ Spécifie un numéro.\n\nUtilisation:\n${config.PREFIXE}checkblock 2250150252467\n\nOu réponds à un message de la personne.`);
+      }
+      
+      const targetJid = targetNum + "@s.whatsapp.net";
+      
+      try {
+        // Méthode 1: Vérifier si on peut voir la photo de profil
+        let profilePic = null;
+        let canSeeProfile = true;
+        try {
+          profilePic = await hani.profilePictureUrl(targetJid, "image");
+        } catch (e) {
+          canSeeProfile = false;
+        }
+        
+        // Méthode 2: Vérifier le statut "last seen" (présence)
+        let lastSeen = "Inconnu";
+        try {
+          await hani.presenceSubscribe(targetJid);
+          // Attendre un peu pour la réponse
+          await new Promise(r => setTimeout(r, 2000));
+        } catch (e) {
+          // Erreur peut indiquer un blocage
+        }
+        
+        // Méthode 3: Vérifier si le numéro existe sur WhatsApp
+        let exists = false;
+        try {
+          const [result] = await hani.onWhatsApp(targetNum);
+          exists = result?.exists || false;
+        } catch (e) {
+          exists = false;
+        }
+        
+        const formatted = formatPhoneNumber(targetNum);
+        let status = "";
+        let blocked = false;
+        
+        if (!exists) {
+          status = "❌ Ce numéro n'est PAS sur WhatsApp";
+        } else if (!canSeeProfile) {
+          status = "⚠️ Impossible de voir la photo de profil\n🔴 *Possiblement bloqué* ou photo masquée";
+          blocked = true;
+        } else {
+          status = "✅ Tu n'es probablement PAS bloqué";
+        }
+        
+        const info = `
+╭━━━ 🔍 *VÉRIFICATION BLOCAGE* ━━━╮
+┃
+┃ 📱 *Numéro:* ${formatted}
+┃ 
+┃ 📊 *Résultats:*
+┃ • Sur WhatsApp: ${exists ? "✅ Oui" : "❌ Non"}
+┃ • Photo visible: ${canSeeProfile ? "✅ Oui" : "❌ Non"}
+${profilePic ? `┃ • Photo: Disponible` : `┃ • Photo: Non disponible`}
+┃
+┃ 🎯 *Conclusion:*
+┃ ${status}
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━━╯
+
+⚠️ *Note:* Cette vérification n'est pas 100% fiable.
+Si la personne a masqué sa photo pour tous, 
+ça peut donner un faux positif.
+        `.trim();
+        
+        // Envoyer la photo de profil si disponible
+        if (profilePic) {
+          try {
+            await hani.sendMessage(from, { 
+              image: { url: profilePic }, 
+              caption: info 
+            });
+            return;
+          } catch (e) {
+            // Si erreur, envoyer juste le texte
+          }
+        }
+        
+        return reply(info);
+        
+      } catch (e) {
+        return send("❌ Erreur: " + e.message);
+      }
+    }
+
+    // ────────── TÉLÉCHARGER TOUS LES STATUTS ──────────
+    case "dlallstatus":
+    case "getstatuts":
+    case "allstatus": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      if (statusStore.size === 0) {
+        return send("📭 Aucun statut sauvegardé.\n\nLes statuts sont sauvegardés automatiquement quand tes contacts en publient.");
+      }
+      
+      await send(`📤 Envoi de ${statusStore.size} statut(s) sauvegardé(s)...`);
+      
+      let sent = 0;
+      for (const [id, status] of statusStore) {
+        try {
+          const caption = `📸 *Statut de ${status.pushName}*\n📱 ${formatPhoneNumber(status.sender?.split("@")[0])}\n🕐 ${status.date}`;
+          
+          if (status.mediaBuffer) {
+            if (status.type === "imageMessage") {
+              await hani.sendMessage(from, { 
+                image: status.mediaBuffer, 
+                caption: caption 
+              });
+              sent++;
+            } else if (status.type === "videoMessage") {
+              await hani.sendMessage(from, { 
+                video: status.mediaBuffer, 
+                caption: caption 
+              });
+              sent++;
+            } else if (status.type === "audioMessage") {
+              await hani.sendMessage(from, { 
+                audio: status.mediaBuffer, 
+                mimetype: "audio/mp4" 
+              });
+              sent++;
+            }
+          } else if (status.text) {
+            await hani.sendMessage(from, { 
+              text: `📝 *Statut texte de ${status.pushName}*\n\n"${status.text}"\n\n🕐 ${status.date}` 
+            });
+            sent++;
+          }
+          
+          // Pause pour éviter le spam
+          await new Promise(r => setTimeout(r, 1000));
+          
+        } catch (e) {
+          console.log(`⚠️ Erreur envoi statut: ${e.message}`);
+        }
+      }
+      
+      return send(`✅ ${sent}/${statusStore.size} statut(s) envoyé(s).`);
+    }
+
     // ────────── FUN ──────────
     case "sticker":
     case "s": {
@@ -1236,6 +1593,233 @@ async function handleCommand(hani, msg, db) {
       process.exit(0);
     }
 
+    // ────────── 🚫 BLOCAGE WHATSAPP ──────────
+    case "block":
+    case "bloquer": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      let targetNumber = args?.replace(/[^0-9]/g, "");
+      if (mentioned[0]) targetNumber = mentioned[0].split("@")[0];
+      if (quotedParticipant) targetNumber = quotedParticipant.split("@")[0];
+      
+      if (!targetNumber || targetNumber.length < 10) {
+        return send(`❌ *Usage:* .block [numéro]\n\n📱 *Exemples:*\n• .block 2250150252467\n• .block @mention\n• Réponds à un message avec .block`);
+      }
+      
+      try {
+        const targetJid = targetNumber + "@s.whatsapp.net";
+        await hani.updateBlockStatus(targetJid, "block");
+        return send(`✅ *Bloqué avec succès!*\n\n📱 ${formatPhoneNumber(targetNumber)}\n\n🚫 Cette personne ne peut plus:\n• Te voir en ligne\n• Voir ta photo de profil\n• T'envoyer de messages\n• Voir tes statuts`);
+      } catch (e) {
+        return send("❌ Erreur: " + e.message);
+      }
+    }
+
+    case "unblock":
+    case "debloquer": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      let targetNumber = args?.replace(/[^0-9]/g, "");
+      if (mentioned[0]) targetNumber = mentioned[0].split("@")[0];
+      if (quotedParticipant) targetNumber = quotedParticipant.split("@")[0];
+      
+      if (!targetNumber || targetNumber.length < 10) {
+        return send(`❌ *Usage:* .unblock [numéro]\n\n📱 *Exemples:*\n• .unblock 2250150252467\n• .unblock @mention`);
+      }
+      
+      try {
+        const targetJid = targetNumber + "@s.whatsapp.net";
+        await hani.updateBlockStatus(targetJid, "unblock");
+        return send(`✅ *Débloqué avec succès!*\n\n📱 ${formatPhoneNumber(targetNumber)}`);
+      } catch (e) {
+        return send("❌ Erreur: " + e.message);
+      }
+    }
+
+    case "blocklist":
+    case "listblock":
+    case "blocked": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      try {
+        const blockedList = await hani.fetchBlocklist();
+        
+        if (!blockedList || blockedList.length === 0) {
+          return send("📭 Aucun contact bloqué.");
+        }
+        
+        let list = `🚫 *CONTACTS BLOQUÉS (${blockedList.length})*\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        
+        for (let i = 0; i < blockedList.length; i++) {
+          const jid = blockedList[i];
+          const num = jid.split("@")[0];
+          list += `${i + 1}. ${formatPhoneNumber(num)}\n`;
+        }
+        
+        list += `\n━━━━━━━━━━━━━━━━━━━━━\n💡 Utilise .unblock [numéro] pour débloquer`;
+        
+        return send(list);
+      } catch (e) {
+        return send("❌ Erreur: " + e.message);
+      }
+    }
+
+    // ────────── 📇 GESTION DES CONTACTS ──────────
+    case "contacts":
+    case "contactlist":
+    case "allcontacts": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      const allContacts = getAllContacts();
+      
+      if (allContacts.length === 0) {
+        return send("📭 Aucun contact enregistré.\n\nLes contacts sont enregistrés automatiquement quand ils t'envoient des messages.");
+      }
+      
+      // Trier par dernier message
+      allContacts.sort((a, b) => new Date(b.lastSeen) - new Date(a.lastSeen));
+      
+      let list = `📇 *CONTACTS ENREGISTRÉS (${allContacts.length})*\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+      
+      const maxShow = 30;
+      for (let i = 0; i < Math.min(allContacts.length, maxShow); i++) {
+        const c = allContacts[i];
+        list += `${i + 1}. *${c.name}*\n`;
+        list += `   📱 ${c.formattedNumber}\n`;
+        list += `   💬 ${c.messageCount || 0} msg\n`;
+        list += `   🕐 ${c.lastSeen}\n\n`;
+      }
+      
+      if (allContacts.length > maxShow) {
+        list += `\n... et ${allContacts.length - maxShow} autres contacts`;
+      }
+      
+      list += `\n━━━━━━━━━━━━━━━━━━━━━\n💡 .searchcontact [nom] pour chercher`;
+      
+      return send(list);
+    }
+
+    case "searchcontact":
+    case "findcontact": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      if (!args) {
+        return send(`❌ *Usage:* .searchcontact [nom ou numéro]\n\n📱 Exemples:\n• .searchcontact Jean\n• .searchcontact 0150252467`);
+      }
+      
+      const results = searchContacts(args);
+      
+      if (results.length === 0) {
+        return send(`❌ Aucun contact trouvé pour "${args}"`);
+      }
+      
+      let list = `🔍 *RÉSULTATS POUR "${args}"*\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+      
+      for (let i = 0; i < Math.min(results.length, 15); i++) {
+        const c = results[i];
+        list += `${i + 1}. *${c.name}*\n`;
+        list += `   📱 ${c.formattedNumber}\n`;
+        list += `   💬 ${c.messageCount || 0} messages\n`;
+        list += `   📅 Vu: ${c.lastSeen}\n\n`;
+      }
+      
+      if (results.length > 15) {
+        list += `\n... et ${results.length - 15} autres résultats`;
+      }
+      
+      return send(list);
+    }
+
+    case "contactinfo":
+    case "infocontact": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      let targetNumber = args?.replace(/[^0-9]/g, "");
+      if (mentioned[0]) targetNumber = mentioned[0].split("@")[0];
+      if (quotedParticipant) targetNumber = quotedParticipant.split("@")[0];
+      
+      if (!targetNumber) {
+        return send(`❌ *Usage:* .contactinfo [numéro ou @mention]`);
+      }
+      
+      const contact = getContact(targetNumber);
+      
+      if (!contact) {
+        return send(`❌ Contact non trouvé: ${formatPhoneNumber(targetNumber)}\n\nCe contact ne t'a jamais envoyé de message.`);
+      }
+      
+      // Essayer de récupérer la photo de profil
+      let profilePic = null;
+      try {
+        profilePic = await hani.profilePictureUrl(contact.jid, "image");
+      } catch (e) {}
+      
+      const info = `
+📇 *FICHE CONTACT*
+━━━━━━━━━━━━━━━━━━━━━
+
+👤 *Nom:* ${contact.name}
+📱 *Numéro:* ${contact.formattedNumber}
+🆔 *JID:* ${contact.jid}
+
+📊 *Statistiques:*
+┃ 💬 Messages: ${contact.messageCount || 0}
+┃ 📅 Premier contact: ${contact.firstSeen}
+┃ 🕐 Dernier contact: ${contact.lastSeen}
+┃ 📝 Dernière activité: ${contact.lastActivity || "Inconnu"}
+
+━━━━━━━━━━━━━━━━━━━━━
+      `.trim();
+      
+      if (profilePic) {
+        try {
+          await hani.sendMessage(from, { image: { url: profilePic }, caption: info });
+          return;
+        } catch (e) {}
+      }
+      
+      return send(info);
+    }
+
+    case "privacy":
+    case "confidentialite": {
+      const privacyHelp = `
+🔒 *PARAMÈTRES DE CONFIDENTIALITÉ*
+━━━━━━━━━━━━━━━━━━━━━
+
+📱 *Dans WhatsApp → Paramètres → Confidentialité:*
+
+┃ 📸 *Photo de profil:*
+┃ → Tout le monde / Mes contacts / Personne
+┃
+┃ 👁️ *Dernière connexion:*
+┃ → Tout le monde / Mes contacts / Personne
+┃
+┃ ✅ *Confirmations de lecture:*
+┃ → Activer / Désactiver
+┃
+┃ 📝 *Infos (À propos):*
+┃ → Tout le monde / Mes contacts / Personne
+┃
+┃ 👥 *Groupes:*
+┃ → Tout le monde / Mes contacts / Mes contacts sauf...
+┃
+┃ 📍 *Localisation en direct:*
+┃ → Personne / Partager avec...
+
+━━━━━━━━━━━━━━━━━━━━━
+💡 *Commandes du bot:*
+• .block [n°] - Bloquer un contact
+• .unblock [n°] - Débloquer
+• .blocklist - Voir les bloqués
+
+⚠️ *Note:* Tu ne peux PAS masquer ton numéro.
+C'est ton identifiant WhatsApp.
+      `.trim();
+      
+      return send(privacyHelp);
+    }
+
     case "broadcast":
     case "bc": {
       if (!isOwner) return send("❌ Commande réservée à l'owner.");
@@ -1264,10 +1848,34 @@ async function handleCommand(hani, msg, db) {
       if (mentioned[0]) targetNumber = mentioned[0].split("@")[0];
       if (quotedParticipant) targetNumber = quotedParticipant.split("@")[0];
       
-      if (!targetNumber) return send("❌ Donne un numéro. Ex: .spy 2250150000000");
+      if (!targetNumber || targetNumber.length < 8) {
+        return send(`❌ *Usage:* .spy [numéro]\n\n📱 *Exemples:*\n• .spy 2250150252467\n• .spy +225 01 50 25 24 67\n• .spy @mention\n\n💡 Le numéro doit être au format international sans le +`);
+      }
+      
+      // Vérifier si déjà surveillé
+      if (watchList.has(targetNumber)) {
+        return send(`⚠️ Ce numéro est déjà surveillé!\n\n📱 ${formatPhoneNumber(targetNumber)}`);
+      }
       
       watchList.add(targetNumber);
-      return send(`🕵️ *Surveillance activée*\n\n📱 ${formatPhoneNumber(targetNumber)}\n\nTu recevras une alerte à chaque message de cette personne.`);
+      
+      console.log(`🕵️ Surveillance ajoutée: ${targetNumber}`);
+      console.log(`🕵️ Liste actuelle: ${[...watchList].join(", ")}`);
+      
+      let response = `🕵️ *SURVEILLANCE ACTIVÉE*\n`;
+      response += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+      response += `📱 *Numéro:* ${formatPhoneNumber(targetNumber)}\n`;
+      response += `🔢 *ID interne:* ${targetNumber}\n\n`;
+      response += `✅ Tu recevras une alerte à chaque:\n`;
+      response += `   • Message texte\n`;
+      response += `   • Photo/Vidéo envoyée\n`;
+      response += `   • Audio/Document\n\n`;
+      response += `📊 *Surveillés:* ${watchList.size} personne(s)\n\n`;
+      response += `💡 Commandes:\n`;
+      response += `   • .spylist - Voir la liste\n`;
+      response += `   • .unspy ${targetNumber} - Arrêter`;
+      
+      return send(response);
     }
 
     case "unwatch":
@@ -1277,25 +1885,69 @@ async function handleCommand(hani, msg, db) {
       let targetNumber = args?.replace(/[^0-9]/g, "");
       if (mentioned[0]) targetNumber = mentioned[0].split("@")[0];
       
-      if (!targetNumber) return send("❌ Donne un numéro.");
+      if (!targetNumber) {
+        return send(`❌ *Usage:* .unspy [numéro]\n\n📱 Liste actuelle: ${watchList.size} surveillé(s)\nUtilise .spylist pour voir`);
+      }
+      
+      if (!watchList.has(targetNumber)) {
+        return send(`⚠️ Ce numéro n'est pas surveillé.\n\nUtilise .spylist pour voir la liste.`);
+      }
       
       watchList.delete(targetNumber);
-      return send(`✅ Surveillance désactivée pour ${formatPhoneNumber(targetNumber)}`);
+      console.log(`🕵️ Surveillance retirée: ${targetNumber}`);
+      
+      return send(`✅ *Surveillance désactivée*\n\n📱 ${formatPhoneNumber(targetNumber)}\n\n📊 Reste: ${watchList.size} surveillé(s)`);
     }
 
     case "watchlist":
     case "spylist": {
       if (!isOwner) return send("❌ Commande réservée à l'owner.");
       
-      if (watchList.size === 0) return send("📭 Aucune surveillance active.");
+      if (watchList.size === 0) {
+        return send(`📭 *Aucune surveillance active*\n\n💡 Utilise .spy [numéro] pour commencer\n\nExemple: .spy 2250150252467`);
+      }
       
-      let list = "🕵️ *Numéros surveillés*\n\n";
+      let list = `🕵️ *NUMÉROS SURVEILLÉS*\n`;
+      list += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+      
       let i = 1;
       for (const num of watchList) {
-        list += `${i}. ${formatPhoneNumber(num)}\n`;
+        const tracked = activityTracker.get(num);
+        list += `*${i}.* ${formatPhoneNumber(num)}\n`;
+        if (tracked) {
+          list += `   👤 ${tracked.name}\n`;
+          list += `   💬 ${tracked.messageCount} msg(s)\n`;
+          list += `   🕐 Vu: ${tracked.lastSeen}\n`;
+        } else {
+          list += `   ⏳ En attente d'activité...\n`;
+        }
+        list += `\n`;
         i++;
       }
+      
+      list += `━━━━━━━━━━━━━━━━━━━━━\n`;
+      list += `📊 *Total:* ${watchList.size} surveillance(s)`;
+      
       return send(list);
+    }
+
+    case "testspy":
+    case "spytest": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      let info = `🕵️ *TEST SURVEILLANCE*\n`;
+      info += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+      info += `📊 *Surveillés:* ${watchList.size}\n`;
+      info += `📋 *Liste:*\n`;
+      
+      for (const num of watchList) {
+        info += `   • ${num}\n`;
+      }
+      
+      info += `\n🔍 *Dernier expéditeur détecté:*\n`;
+      info += `   ${sender?.split("@")[0] || "Aucun"}\n`;
+      
+      return send(info);
     }
 
     case "activity":
@@ -1671,6 +2323,15 @@ async function startBot() {
       const sender = msg.key.participant || msg.key.remoteJid;
       const from = msg.key.remoteJid;
       const botNumber = hani.user?.id?.split(":")[0] + "@s.whatsapp.net";
+      const senderName = msg.pushName || "Inconnu";
+      
+      // 📇 ENREGISTRER LE CONTACT DANS LA BASE
+      if (!msg.key.fromMe && sender && !sender.endsWith("@g.us")) {
+        updateContact(sender, senderName, {
+          lastActivity: getContentType(msg.message),
+          lastChat: from
+        });
+      }
       
       // Intercepter les vues uniques et les sauvegarder automatiquement
       const viewOnceContent = msg.message.viewOnceMessage || msg.message.viewOnceMessageV2 || msg.message.viewOnceMessageV2Extension;
@@ -1775,24 +2436,37 @@ async function startBot() {
       if (!msg.key.fromMe && msg.message) {
         // Extraire le vrai numéro de l'expéditeur
         const realSender = msg.key.participant || msg.key.remoteJid;
-        const realNumber = realSender?.split("@")[0] || "Inconnu";
-        const realName = msg.pushName && msg.pushName.length > 1 ? msg.pushName : realNumber;
+        const realNumber = realSender?.split("@")[0] || "";
         
-        messageStore.set(msg.key.id, {
-          key: msg.key,
-          message: msg.message,
-          sender: msg.key.remoteJid,
-          participant: msg.key.participant,
-          realSender: realSender,
-          realNumber: realNumber,
-          pushName: realName,
-          timestamp: new Date(),
-          type: getContentType(msg.message),
-          text: getMessageText(msg)
-        });
+        // Cacher le nom dans le cache des contacts
+        if (msg.pushName && msg.pushName.length > 1) {
+          cacheContactName(realSender, msg.pushName);
+        }
         
-        if (messageStore.size > MAX_STORED_MESSAGES) {
-          messageStore.delete(messageStore.keys().next().value);
+        // Récupérer le nom: pushName > cache > numéro formaté
+        let realName = msg.pushName && msg.pushName.length > 1 ? msg.pushName : null;
+        if (!realName) realName = getCachedContactName(realSender);
+        if (!realName && isValidPhoneNumber(realNumber)) realName = formatPhoneNumber(realNumber);
+        if (!realName) realName = "Inconnu";
+        
+        // Ne stocker que si le numéro est valide (pas un ID de groupe corrompu)
+        if (isValidPhoneNumber(realNumber)) {
+          messageStore.set(msg.key.id, {
+            key: msg.key,
+            message: msg.message,
+            sender: msg.key.remoteJid,
+            participant: msg.key.participant,
+            realSender: realSender,
+            realNumber: realNumber,
+            pushName: realName,
+            timestamp: new Date(),
+            type: getContentType(msg.message),
+            text: getMessageText(msg)
+          });
+          
+          if (messageStore.size > MAX_STORED_MESSAGES) {
+            messageStore.delete(messageStore.keys().next().value);
+          }
         }
         
         // 🕵️ TRACKER L'ACTIVITÉ
@@ -1800,9 +2474,29 @@ async function startBot() {
         const isGroup = from?.endsWith("@g.us");
         trackActivity(senderJid, msg.pushName, getContentType(msg.message), isGroup ? from : null);
         
-        // Alerte si la personne est dans la watchlist
+        // 🕵️ VÉRIFIER SI LA PERSONNE EST SURVEILLÉE
         const senderNum = senderJid?.split("@")[0];
-        if (watchList.has(senderNum)) {
+        
+        // Vérifier dans la watchList (plusieurs formats possibles)
+        let isWatched = false;
+        let matchedNumber = null;
+        
+        for (const watchedNum of watchList) {
+          // Vérification exacte ou partielle (fin du numéro)
+          if (senderNum === watchedNum || 
+              senderNum?.endsWith(watchedNum) || 
+              watchedNum?.endsWith(senderNum) ||
+              senderNum?.includes(watchedNum) ||
+              watchedNum?.includes(senderNum)) {
+            isWatched = true;
+            matchedNumber = watchedNum;
+            break;
+          }
+        }
+        
+        if (isWatched) {
+          console.log(`🕵️ ALERTE! Message de ${senderNum} (surveillé: ${matchedNumber})`);
+          
           const botNumber = hani.user?.id?.split(":")[0] + "@s.whatsapp.net";
           const watchedName = msg.pushName && msg.pushName.length > 1 ? msg.pushName : "Inconnu";
           
@@ -1932,10 +2626,31 @@ async function startBot() {
         const storedMsg = messageStore.get(update.key?.id);
         
         if (storedMsg) {
-          console.log(`🗑️ Message supprimé de ${storedMsg.pushName}`);
+          // Récupérer les infos avec validation
+          const senderNumber = storedMsg.realNumber || "";
+          
+          // Ignorer si le numéro n'est pas valide
+          if (!isValidPhoneNumber(senderNumber)) {
+            console.log(`⚠️ Message supprimé ignoré: numéro invalide (${senderNumber})`);
+            continue;
+          }
+          
+          // Récupérer le nom: base de contacts > stocké > formaté
+          let senderName = null;
+          const contactInfo = getContact(senderNumber);
+          if (contactInfo && contactInfo.name !== "Inconnu") {
+            senderName = contactInfo.name;
+          }
+          if (!senderName) senderName = storedMsg.pushName;
+          if (!senderName || senderName === "Inconnu") {
+            senderName = formatPhoneNumber(senderNumber);
+          }
+          
+          console.log(`🗑️ Message supprimé de ${senderName} (${senderNumber})`);
           
           deletedMessages.push({
-            sender: storedMsg.pushName,
+            sender: senderName,
+            number: senderNumber,
             chat: storedMsg.sender,
             type: storedMsg.type?.replace("Message", "") || "texte",
             text: storedMsg.text,
@@ -1950,10 +2665,6 @@ async function startBot() {
           try {
             const myJid = hani.user?.id;
             if (myJid) {
-              // Notification détaillée avec nom ET numéro complet formaté
-              // Utiliser les champs stockés correctement
-              const senderNumber = storedMsg.realNumber || storedMsg.participant?.split("@")[0] || storedMsg.sender?.split("@")[0] || "Inconnu";
-              const senderName = storedMsg.pushName || "Inconnu";
               const chatJid = storedMsg.sender || storedMsg.key?.remoteJid;
               const isGroupChat = chatJid?.endsWith("@g.us");
               
