@@ -25,7 +25,3 @@ services:
         value: "HANI-MD"
       - key: STICKER_AUTHOR_NAME
         value: "H2025"
-    disk:
-      name: hani-session
-      mountPath: /opt/render/project/src/DataBase/session
-      sizeGB: 1
