@@ -169,7 +169,7 @@ npm start
 5. Configurez :
    - **Name**: `hani-md`
    - **Region**: `Frankfurt` (ou le plus proche)
-   - **Build Command**: `npm install`
+   - **Build Command**: `npm install --legacy-peer-deps`
    - **Start Command**: `node hani.js`
 6. Ajoutez les **Environment Variables** :
    ```
@@ -177,11 +177,38 @@ npm start
    NOM_OWNER = VotreNom
    NUMERO_OWNER = 22501XXXXXXXX
    MODE = public
-   STICKER_PACK_NAME = HANI-MD
-   STICKER_AUTHOR_NAME = VotreNom
+   SESSION_ID = HANI-MD~xxxxxxx  (voir ci-dessous)
+   MONGODB_URI = mongodb+srv://...  (optionnel, voir ci-dessous)
    ```
 7. Cliquez sur **Create Web Service**
-8. Attendez le déploiement et scannez le QR code dans les logs
+
+### 🔑 Générer un SESSION_ID (Obligatoire pour Render)
+
+Render n'a pas de stockage persistant sur le plan gratuit. Vous devez générer un SESSION_ID localement :
+
+```bash
+# Sur votre PC, après avoir scanné le QR code une première fois
+node session-generator.js
+
+# Copiez le SESSION_ID affiché et ajoutez-le dans Render
+```
+
+### 🗄️ Base de Données MongoDB (Recommandé)
+
+Pour que vos données (contacts, messages supprimés, stats) persistent entre les redémarrages :
+
+1. Créez un compte gratuit sur [MongoDB Atlas](https://www.mongodb.com/atlas/database)
+2. Créez un cluster gratuit (M0 Free Tier)
+3. Dans **Database Access** : Créez un utilisateur avec mot de passe
+4. Dans **Network Access** : Ajoutez `0.0.0.0/0` (accès global)
+5. Cliquez **Connect** → **Connect your application**
+6. Copiez l'URI et remplacez `<password>` par votre mot de passe
+7. Ajoutez `MONGODB_URI` dans les variables d'environnement Render
+
+**Format de l'URI** :
+```
+mongodb+srv://username:password@cluster.xxxxx.mongodb.net/hani_db
+```
 
 ---
 
@@ -193,8 +220,8 @@ npm start
 | `NOM_OWNER` | Votre nom | `Hanie` |
 | `NUMERO_OWNER` | Votre numéro WhatsApp (sans +) | `2250150252467` |
 | `MODE` | `public` (tous) ou `private` (vous seul) | `public` |
-| `STICKER_PACK_NAME` | Nom du pack de stickers | `HANI-MD` |
-| `STICKER_AUTHOR_NAME` | Auteur des stickers | `Hanie` |
+| `SESSION_ID` | Session encodée pour déploiement | `HANI-MD~xxx...` |
+| `MONGODB_URI` | URI MongoDB Atlas (optionnel) | `mongodb+srv://...` |
 
 ---
 
@@ -203,6 +230,7 @@ npm start
 ⚠️ **Important** :
 - Ne partagez jamais votre fichier `.env`
 - Ne partagez jamais le dossier `DataBase/session/`
+- Ne partagez jamais votre `SESSION_ID`
 - Utilisez les fonctionnalités de surveillance de manière éthique
 
 ---
@@ -218,3 +246,4 @@ npm start
 <p align="center">
   <b>⭐ Si vous aimez ce projet, n'oubliez pas de mettre une étoile ! ⭐</b>
 </p>
+

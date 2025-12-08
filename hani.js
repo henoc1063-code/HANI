@@ -13,6 +13,7 @@ const fs = require("fs");
 const path = require("path");
 const pino = require("pino");
 const qrcode = require("qrcode-terminal");
+const mongoDB = require("./DataBase/mongodb"); // MongoDB pour persistance externe
 const {
   default: makeWASocket,
   makeCacheableSignalKeyStore,
@@ -25,13 +26,52 @@ const {
 } = require("@whiskeysockets/baileys");
 
 // ═══════════════════════════════════════════════════════════
-// 📦 BASE DE DONNÉES SQLITE LÉGÈRE
+// 📦 BASE DE DONNÉES HYBRIDE (Local + MongoDB)
 // ═══════════════════════════════════════════════════════════
 
 class HaniDatabase {
   constructor(dbPath = "./DataBase/hani.json") {
     this.dbPath = dbPath;
     this.data = this.load();
+    this.mongoConnected = false;
+    this.syncQueue = [];
+    
+    // Connexion MongoDB en arrière-plan
+    this.initMongoDB();
+  }
+
+  async initMongoDB() {
+    try {
+      if (process.env.MONGODB_URI) {
+        await mongoDB.connect();
+        this.mongoConnected = true;
+        console.log("✅ MongoDB connecté - Les données seront synchronisées");
+        
+        // Charger les données depuis MongoDB si disponible
+        await this.loadFromMongo();
+        
+        // Nettoyage automatique des anciennes données (30 jours)
+        mongoDB.cleanOldData(30).catch(() => {});
+      } else {
+        console.log("⚠️ MONGODB_URI non défini - Mode local uniquement");
+      }
+    } catch (e) {
+      console.log("⚠️ MongoDB non disponible:", e.message);
+      this.mongoConnected = false;
+    }
+  }
+
+  async loadFromMongo() {
+    try {
+      // Charger les stats depuis MongoDB
+      const stats = await mongoDB.getStats();
+      if (stats) {
+        this.data.stats = { ...this.data.stats, ...stats };
+      }
+      console.log("📊 Données MongoDB chargées");
+    } catch (e) {
+      // Ignorer si pas de données
+    }
   }
 
   load() {
@@ -55,9 +95,34 @@ class HaniDatabase {
 
   save() {
     try {
+      // Sauvegarder localement
       fs.writeFileSync(this.dbPath, JSON.stringify(this.data, null, 2));
+      
+      // Synchroniser avec MongoDB en arrière-plan
+      if (this.mongoConnected) {
+        this.syncToMongo().catch(() => {});
+      }
     } catch (e) {
       console.log("⚠️ Erreur sauvegarde DB:", e.message);
+    }
+  }
+
+  async syncToMongo() {
+    try {
+      // Sync stats
+      await mongoDB.updateStats(this.data.stats);
+      
+      // Sync users (batch pour performance)
+      for (const [jid, userData] of Object.entries(this.data.users)) {
+        await mongoDB.updateUser(jid, userData);
+      }
+      
+      // Sync groups
+      for (const [jid, groupData] of Object.entries(this.data.groups)) {
+        await mongoDB.updateGroup(jid, groupData);
+      }
+    } catch (e) {
+      // Ignorer les erreurs de sync
     }
   }
 
@@ -167,6 +232,76 @@ class HaniDatabase {
   incrementStats(key) {
     this.data.stats[key] = (this.data.stats[key] || 0) + 1;
   }
+
+  // === NOUVELLES FONCTIONS MONGODB ===
+
+  // Sauvegarder un message supprimé
+  async saveDeletedMessage(message, from, sender, groupName = null) {
+    if (this.mongoConnected) {
+      try {
+        await mongoDB.saveDeletedMessage({
+          messageId: message.key?.id,
+          from,
+          sender,
+          groupName,
+          text: message.message?.conversation || 
+                message.message?.extendedTextMessage?.text || "",
+          mediaType: message.message?.imageMessage ? "image" : 
+                     message.message?.videoMessage ? "video" : 
+                     message.message?.audioMessage ? "audio" : 
+                     message.message?.documentMessage ? "document" : null
+        });
+      } catch (e) {}
+    }
+  }
+
+  // Récupérer les messages supprimés
+  async getDeletedMessages(jid = null, limit = 20) {
+    if (this.mongoConnected) {
+      try {
+        return await mongoDB.getDeletedMessages(jid, limit);
+      } catch (e) {}
+    }
+    return [];
+  }
+
+  // Sauvegarder un statut supprimé
+  async saveDeletedStatus(statusData) {
+    if (this.mongoConnected) {
+      try {
+        await mongoDB.saveDeletedStatus(statusData);
+      } catch (e) {}
+    }
+  }
+
+  // Récupérer les statuts supprimés
+  async getDeletedStatuses(sender = null, limit = 20) {
+    if (this.mongoConnected) {
+      try {
+        return await mongoDB.getDeletedStatuses(sender, limit);
+      } catch (e) {}
+    }
+    return [];
+  }
+
+  // Sauvegarder un contact
+  async saveContact(jid, name, phone) {
+    if (this.mongoConnected) {
+      try {
+        await mongoDB.saveContact(jid, name, phone);
+      } catch (e) {}
+    }
+  }
+
+  // Chercher un contact
+  async searchContacts(query) {
+    if (this.mongoConnected) {
+      try {
+        return await mongoDB.searchContacts(query);
+      } catch (e) {}
+    }
+    return [];
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -184,10 +319,51 @@ const config = {
   MODE: process.env.MODE || "public",
   STICKER_PACK: "HANI-MD",
   STICKER_AUTHOR: "H2025",
+  SESSION_ID: process.env.SESSION_ID || "",  // Session encodée pour déploiement
 };
 
 const SESSION_FOLDER = "./DataBase/session/principale";
 const db = new HaniDatabase();
+
+// ═══════════════════════════════════════════════════════════
+// 🔐 RESTAURATION DE SESSION DEPUIS SESSION_ID
+// ═══════════════════════════════════════════════════════════
+
+async function restoreSessionFromId() {
+  const sessionId = config.SESSION_ID;
+  
+  if (!sessionId || !sessionId.startsWith("HANI-MD~")) {
+    console.log("📱 Pas de SESSION_ID, scan QR requis...");
+    return false;
+  }
+  
+  try {
+    console.log("🔐 Restauration de session depuis SESSION_ID...");
+    
+    // Décoder la session
+    const base64Data = sessionId.replace("HANI-MD~", "");
+    const jsonString = Buffer.from(base64Data, "base64").toString("utf-8");
+    const sessionBundle = JSON.parse(jsonString);
+    
+    // Créer le dossier si nécessaire
+    if (!fs.existsSync(SESSION_FOLDER)) {
+      fs.mkdirSync(SESSION_FOLDER, { recursive: true });
+    }
+    
+    // Écrire les fichiers de session
+    for (const [filename, base64Content] of Object.entries(sessionBundle)) {
+      const filePath = path.join(SESSION_FOLDER, filename);
+      const content = Buffer.from(base64Content, "base64");
+      fs.writeFileSync(filePath, content);
+    }
+    
+    console.log("✅ Session restaurée avec succès !");
+    return true;
+  } catch (e) {
+    console.error("❌ Erreur restauration session:", e.message);
+    return false;
+  }
+}
 
 // ═══════════════════════════════════════════════════════════
 // 🛡️ ÉTATS DES PROTECTIONS (GLOBAL)
@@ -562,6 +738,10 @@ function getMainMenu(prefix) {
 async function handleCommand(hani, msg, db) {
   const from = msg.key.remoteJid;
   const body = getMessageText(msg);
+  
+  // Debug: afficher le texte brut reçu
+  console.log(`[DEBUG] Texte brut reçu: "${body}" | Préfixe attendu: "${config.PREFIXE}"`);
+  
   if (!body || !body.startsWith(config.PREFIXE)) return;
 
   const [cmd, ...rest] = body.slice(config.PREFIXE.length).trim().split(/\s+/);
@@ -2222,14 +2402,27 @@ async function startBot() {
 `);
 
   // Créer les dossiers nécessaires
-  if (!fs.existsSync(SESSION_FOLDER)) {
-    fs.mkdirSync(SESSION_FOLDER, { recursive: true });
-  }
   if (!fs.existsSync("./DataBase")) {
     fs.mkdirSync("./DataBase", { recursive: true });
   }
 
+  // Restaurer la session depuis SESSION_ID si disponible
+  if (config.SESSION_ID) {
+    await restoreSessionFromId();
+  }
+  
+  // Créer le dossier session si nécessaire
+  if (!fs.existsSync(SESSION_FOLDER)) {
+    fs.mkdirSync(SESSION_FOLDER, { recursive: true });
+  }
+
   const { state, saveCreds } = await useMultiFileAuthState(SESSION_FOLDER);
+
+  // Sauvegarder les credentials immédiatement et régulièrement
+  const saveCredsWrapper = async () => {
+    await saveCreds();
+    console.log("💾 Session sauvegardée");
+  };
 
   hani = makeWASocket({
     auth: {
@@ -2237,16 +2430,19 @@ async function startBot() {
       keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
     },
     logger: pino({ level: "silent" }),
-    browser: ["HANI-MD", "Chrome", "120.0.0"],
-    keepAliveIntervalMs: 15000,
-    markOnlineOnConnect: false,
+    browser: Browsers.ubuntu("Chrome"),
+    keepAliveIntervalMs: 30000,
+    markOnlineOnConnect: true,
     generateHighQualityLinkPreview: true,
     syncFullHistory: false,
-    retryRequestDelayMs: 2000,
-    connectTimeoutMs: 60000,
-    defaultQueryTimeoutMs: 60000,
+    retryRequestDelayMs: 3000,
+    connectTimeoutMs: 120000,
+    defaultQueryTimeoutMs: 120000,
     emitOwnEvents: true,
     fireInitQueries: true,
+    getMessage: async (key) => {
+      return { conversation: "" };
+    },
   });
 
   // ────────── ÉVÉNEMENTS DE CONNEXION ──────────
@@ -2263,6 +2459,9 @@ async function startBot() {
     }
 
     if (connection === "open") {
+      // Sauvegarder immédiatement après connexion réussie
+      await saveCredsWrapper();
+      
       console.log(`
 ╔═══════════════════════════════════════════════════════════╗
 ║              ✅ HANI-MD CONNECTÉ !                        ║
@@ -2312,7 +2511,7 @@ async function startBot() {
     }
   });
 
-  hani.ev.on("creds.update", saveCreds);
+  hani.ev.on("creds.update", saveCredsWrapper);
 
   // ────────── GESTION DES MESSAGES ──────────
   hani.ev.on("messages.upsert", async (m) => {
