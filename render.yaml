@@ -1,24 +1,31 @@
 services:
   - type: web
     name: hani-md
-    env: node
+    runtime: node
     region: frankfurt
     plan: free
-    buildCommand: npm install
+    buildCommand: npm install --legacy-peer-deps && npm rebuild sharp
     startCommand: node hani.js
-    healthCheckPath: /
+    healthCheckPath: /health
+    autoDeploy: true
     envVars:
       - key: NODE_ENV
         value: production
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=512
       - key: PREFIXE
-        sync: false
+        value: "."
       - key: NOM_OWNER
-        sync: false
+        value: "H2025"
       - key: NUMERO_OWNER
-        sync: false
+        value: "2250150252467"
       - key: MODE
-        sync: false
+        value: "public"
       - key: STICKER_PACK_NAME
-        sync: false
+        value: "HANI-MD"
       - key: STICKER_AUTHOR_NAME
-        sync: false
+        value: "H2025"
+    disk:
+      name: hani-session
+      mountPath: /opt/render/project/src/DataBase/session
+      sizeGB: 1

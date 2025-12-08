@@ -2802,6 +2802,11 @@ const express = require("express");
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Health check pour Render
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok", uptime: process.uptime() });
+});
+
 app.get("/", (req, res) => {
   const uptime = formatUptime(Date.now() - db.data.stats.startTime);
   res.send(`
