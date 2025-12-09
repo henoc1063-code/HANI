@@ -13,6 +13,7 @@ const fs = require("fs");
 const path = require("path");
 const pino = require("pino");
 const qrcode = require("qrcode-terminal");
+const qrcodeWeb = require("qrcode"); // Pour générer QR en image web
 const mysqlDB = require("./DataBase/mysql"); // MySQL pour persistance externe
 const {
   default: makeWASocket,
@@ -24,6 +25,21 @@ const {
   downloadMediaMessage,
   getContentType,
 } = require("@whiskeysockets/baileys");
+
+// ═══════════════════════════════════════════════════════════
+// 📱 SYSTÈME QR CODE MULTI-UTILISATEURS
+// ═══════════════════════════════════════════════════════════
+
+// État global pour le QR Code
+const qrState = {
+  currentQR: null,           // QR code actuel (string)
+  qrDataURL: null,           // QR code en base64 pour affichage web
+  lastUpdate: null,          // Timestamp de la dernière mise à jour
+  isConnected: false,        // État de connexion
+  connectionStatus: "disconnected", // disconnected, waiting_qr, connecting, connected
+  botInfo: null,             // Infos du bot connecté
+  qrCount: 0,                // Nombre de QR générés
+};
 
 // ═══════════════════════════════════════════════════════════
 // 📦 BASE DE DONNÉES HYBRIDE (Local + MySQL)
@@ -234,6 +250,37 @@ class HaniDatabase {
     this.save();
   }
 
+  // Approved Users (utilisateurs approuvés avec accès limité)
+  isApproved(jid) {
+    if (!this.data.approved) this.data.approved = [];
+    return this.data.approved.includes(jid) || this.data.approved.some(n => jid.includes(n));
+  }
+
+  addApproved(jid) {
+    if (!this.data.approved) this.data.approved = [];
+    if (!this.isApproved(jid)) {
+      this.data.approved.push(jid);
+      this.save();
+      return true;
+    }
+    return false;
+  }
+
+  removeApproved(jid) {
+    if (!this.data.approved) this.data.approved = [];
+    const before = this.data.approved.length;
+    this.data.approved = this.data.approved.filter(s => s !== jid && !jid.includes(s) && !s.includes(jid.replace(/[^0-9]/g, '')));
+    if (this.data.approved.length < before) {
+      this.save();
+      return true;
+    }
+    return false;
+  }
+
+  getApprovedList() {
+    return this.data.approved || [];
+  }
+
   // Stats
   incrementStats(key) {
     this.data.stats[key] = (this.data.stats[key] || 0) + 1;
@@ -433,14 +480,113 @@ async function restoreSessionFromId() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// 🛡️ ÉTATS DES PROTECTIONS (GLOBAL)
+// 🛡️ ÉTATS DES PROTECTIONS (GLOBAL) - TOUT ACTIVÉ AUTOMATIQUEMENT
 // ═══════════════════════════════════════════════════════════
 
 const protectionState = {
-  antidelete: true,
-  anticall: true,
-  antideletestatus: true,  // Pour sauvegarder les statuts automatiquement
+  antidelete: true,           // Messages supprimés → envoyés à Moi-même
+  anticall: true,             // Rejeter les appels automatiquement
+  antideletestatus: true,     // Statuts supprimés → envoyés à Moi-même
+  autoViewOnce: true,         // Photos/Vidéos vue unique → envoyées à Moi-même
+  autoViewOnceAudio: true,    // Vocaux écoute unique → envoyés à Moi-même
+  autoSaveStatus: true,       // Tous les statuts → sauvegardés automatiquement
+  antibot: true,              // Bloquer les autres bots WhatsApp
 };
+
+// ═══════════════════════════════════════════════════════════
+// 🎫 SYSTÈME DE PERMISSIONS - COMMANDES PAR NIVEAU
+// ═══════════════════════════════════════════════════════════
+
+// Commandes accessibles à TOUT LE MONDE (users normaux)
+const publicCommands = [
+  // Général
+  "ping", "menu", "help", "info", "runtime", "uptime",
+  // Permissions (chacun peut voir son niveau)
+  "permissions", "myaccess", "mylevel", "whoami",
+  // Fun
+  "sticker", "s", "toimg", "toimage",
+  // Téléchargement basique
+  "tiktok", "tt", "ytmp3", "ytmp4", "play", "song", "video",
+  // IA (limité)
+  "gpt", "ai", "gemini",
+  // Outils basiques
+  "calc", "tts", "translate", "tr",
+  // Profil
+  "profil", "profile", "me", "level", "rank",
+];
+
+// Commandes pour utilisateurs APPROUVÉS (approved)
+const approvedCommands = [
+  ...publicCommands,
+  // Téléchargement avancé
+  "ig", "instagram", "fb", "facebook", "twitter", "x",
+  "pinterest", "pin", "spotify", "mediafire",
+  // Recherche
+  "ytsearch", "lyrics", "weather", "meteo",
+  // Images
+  "imagine", "dalle", "image",
+  // Jeux
+  "slot", "dice", "flip", "rps",
+];
+
+// Commandes pour SUDO (admins de confiance)
+const sudoCommands = [
+  ...approvedCommands,
+  // Groupe (modération)
+  "kick", "add", "promote", "demote", "mute", "unmute",
+  "hidetag", "tagall", "antilink", "antispam",
+  // Outils avancés
+  "broadcast", "bc",
+];
+
+// Commandes OWNER SEULEMENT (toi uniquement)
+const ownerOnlyCommands = [
+  // Contrôle total
+  "eval", "exec", "shell", "restart", "shutdown",
+  // Mode du bot
+  "mode",
+  // Gestion utilisateurs
+  "ban", "unban", "sudo", "delsudo", "addsudo", "removesudo", "sudolist",
+  "approve", "unapprove", "approved", "addapprove", "removeapprove", "delapprove", "approvelist", "approvedlist",
+  "blockedbots", "blockbot", "unblockbot",
+  // Protections
+  "antidelete", "anticall", "antibot", "viewonce", "audioonce", "savestatus",
+  "protection", "antideletestatus",
+  // Blocage WhatsApp
+  "block", "unblock", "bloquer", "debloquer",
+  // Configuration
+  "setprefix", "setname", "setbio", "setpp", "setppgroup",
+  // Debug
+  "test", "debug", "clearsession",
+  // Surveillance (tes fonctionnalités privées)
+  "deleted", "delmsg", "deletedstatus", "delstatus", "statusdel",
+  "vv", "viewonce", "getstatus", "spy", "track", "activity",
+];
+
+// Liste des utilisateurs approuvés
+const approvedUsers = new Set();
+
+// 🤖 PATTERNS POUR DÉTECTER LES BOTS
+const botPatterns = [
+  /╭━━.*bot.*╮/i,
+  /┃.*bot\s*name/i,
+  /┃.*owner\s*:/i,
+  /┃.*prefix\s*:/i,
+  /┃.*uptime\s*:/i,
+  /┃.*mode\s*:\s*\*(public|private)\*/i,
+  /╰━━.*━━┈⊷/i,
+  /powered\s*by/i,
+  /at\s*your\s*service/i,
+  /\.menu|\.help|\.allmenu/i,
+  /bot\s*v\d|version\s*:\s*\*?\d/i,
+  /ʙᴏᴛ\s*ɴᴀᴍᴇ/i,
+  /ᴏᴡɴᴇʀ\s*:/i,
+  /ᴘʀᴇғɪx\s*:/i,
+  /ᴜᴘᴛɪᴍᴇ\s*:/i,
+];
+
+// Liste des bots bloqués (numéros)
+const blockedBots = new Set();
 
 // ═══════════════════════════════════════════════════════════
 // 💾 STOCKAGE EN MÉMOIRE
@@ -693,20 +839,44 @@ function getMainMenu(prefix) {
 ┃ 👑 Owner   : *${config.NOM_OWNER}*
 ╰━━━━━━━━━━━━━━━━━━━━━━━━━╯
 
+╭━━━ 🔐 *NIVEAUX D'ACCÈS* ━━━╮
+┃ 👑 Owner → Accès total
+┃ 🛡️ Sudo → Admin du bot
+┃ ✅ Approuvé → IA, downloads
+┃ 👤 Public → Commandes basiques
+┃ 
+┃ ${prefix}permissions - Voir ton niveau
+╰━━━━━━━━━━━━━━━━━━━━━━━━━╯
+
 ╭━━━ 📋 *MENU PRINCIPAL* ━━━╮
 ┃
-┃ 📌 *GÉNÉRAL*
+┃ 📌 *GÉNÉRAL* (Tous)
 ┃ ${prefix}ping - Tester le bot
 ┃ ${prefix}info - Infos du bot
 ┃ ${prefix}stats - Statistiques
 ┃ ${prefix}runtime - Temps en ligne
+┃ ${prefix}whoami - Qui suis-je?
 ┃
-┃ 👤 *UTILISATEUR*
+┃ 👤 *UTILISATEUR* (Tous)
 ┃ ${prefix}profil - Ton profil
 ┃ ${prefix}level - Ton niveau
 ┃ ${prefix}daily - Bonus quotidien
 ┃
-┃ 👥 *GROUPE* (Admins)
+┃ 🎮 *FUN* (Approuvés)
+┃ ${prefix}sticker - Créer sticker
+┃ ${prefix}emoji [😀] - Agrandir emoji
+┃ ${prefix}dice - Lancer un dé
+┃ ${prefix}flip - Pile ou face
+┃ ${prefix}quote - Citation random
+┃
+┃ 🔧 *OUTILS* (Approuvés)
+┃ ${prefix}calc [expression]
+┃ ${prefix}tts [texte] - Text to Speech
+┃ ${prefix}tr [lang] [texte] - Traduire
+┃ ${prefix}gpt [question] - ChatGPT
+┃ ${prefix}dalle [description] - Image IA
+┃
+┃ 👥 *GROUPE* (Admins/Sudo)
 ┃ ${prefix}kick @user - Exclure
 ┃ ${prefix}add 2250000 - Ajouter
 ┃ ${prefix}promote @user - Promouvoir
@@ -716,7 +886,7 @@ function getMainMenu(prefix) {
 ┃ ${prefix}tagall - Mentionner tous
 ┃ ${prefix}hidetag [msg] - Tag caché
 ┃
-┃ 🛡️ *PROTECTIONS* (Groupe)
+┃ 🛡️ *PROTECTIONS* (Owner)
 ┃ ${prefix}antilink on/off
 ┃ ${prefix}antispam on/off
 ┃ ${prefix}antibot on/off
@@ -726,75 +896,50 @@ function getMainMenu(prefix) {
 ┃ ${prefix}unwarn @user - Retirer warn
 ┃ ${prefix}warnlist - Liste warns
 ┃
-┃ 👁️ *VUE UNIQUE*
+┃ 👁️ *VUE UNIQUE* (Owner)
 ┃ ${prefix}vv - Récupérer (répondre)
 ┃ ${prefix}listvv - Liste interceptées
+┃ ${prefix}viewonce on/off
+┃ ${prefix}audioonce on/off
 ┃
-┃ 🗑️ *ANTI-DELETE*
+┃ 🗑️ *ANTI-DELETE* (Owner)
 ┃ ${prefix}antidelete on/off
 ┃ ${prefix}deleted - Voir supprimés
 ┃
-┃ 📸 *STATUTS / STORIES*
+┃ 📸 *STATUTS / STORIES* (Owner)
 ┃ ${prefix}savestatus on/off - Auto-save
 ┃ ${prefix}deletedstatus - Statuts supprimés
 ┃ ${prefix}getstatus [n°] - Récupérer statut
 ┃ ${prefix}liststatus - Tous les statuts
 ┃ ${prefix}allstatus - Télécharger tous
 ┃
-┃ 🔍 *VÉRIFICATIONS*
-┃ ${prefix}checkblock [n°] - Vérifie blocage
-┃ ${prefix}whoami - Ton numéro/statut
-┃
-┃ 🎮 *FUN*
-┃ ${prefix}sticker - Créer sticker
-┃ ${prefix}emoji [😀] - Agrandir emoji
-┃ ${prefix}dice - Lancer un dé
-┃ ${prefix}flip - Pile ou face
-┃ ${prefix}quote - Citation random
-┃
-┃ 🔧 *OUTILS*
-┃ ${prefix}calc [expression]
-┃ ${prefix}tts [texte] - Text to Speech
-┃ ${prefix}tr [lang] [texte] - Traduire
-┃
-┃ 🕵️ *SURVEILLANCE* (Owner)
-┃ ${prefix}spy @user - Surveiller
-┃ ${prefix}unspy @user - Arrêter surveillance
-┃ ${prefix}spylist - Liste surveillés
-┃ ${prefix}activity - Top 15 actifs
-┃ ${prefix}activity @user - Voir activité
-┃
-┃ 📁 *EXTRACTION*
-┃ ${prefix}extract @user - Médias reçus
-┃ ${prefix}getmedia @user [n°] - Télécharger
-┃ ${prefix}medialist - Tout voir
-┃
-┃ 👑 *OWNER SEULEMENT*
-┃ ${prefix}ban @user - Bannir du bot
-┃ ${prefix}unban @user - Débannir
-┃ ${prefix}banlist - Liste bannis
+┃ 👑 *GESTION UTILISATEURS* (Owner)
+┃ ${prefix}approve @user - Approuver
+┃ ${prefix}unapprove @user - Retirer
+┃ ${prefix}approved - Liste approuvés
 ┃ ${prefix}sudo @user - Ajouter sudo
 ┃ ${prefix}delsudo @user - Retirer sudo
 ┃ ${prefix}sudolist - Liste sudos
+┃ ${prefix}ban @user - Bannir
+┃ ${prefix}unban @user - Débannir
+┃ ${prefix}banlist - Liste bannis
+┃ ${prefix}mode public/private
+┃
+┃ 🔒 *BLOCAGE* (Owner)
+┃ ${prefix}block [n°] - Bloquer contact
+┃ ${prefix}unblock [n°] - Débloquer
+┃ ${prefix}blockedbots - Bots bloqués
+┃
+┃ ⚙️ *SYSTÈME* (Owner)
 ┃ ${prefix}broadcast [msg] - Diffuser
 ┃ ${prefix}setowner [n°] - Définir owner
 ┃ ${prefix}restart - Redémarrer
-┃
-┃ 🔒 *CONFIDENTIALITÉ*
-┃ ${prefix}block [n°] - Bloquer contact
-┃ ${prefix}unblock [n°] - Débloquer
-┃ ${prefix}blocklist - Liste bloqués
-┃ ${prefix}privacy - Aide confidentialité
-┃
-┃ 📇 *BASE DE CONTACTS*
-┃ ${prefix}contacts - Voir tous
-┃ ${prefix}searchcontact [nom] - Chercher
-┃ ${prefix}contactinfo [n°] - Fiche contact
+┃ ${prefix}protection - Voir protections
 ┃
 ╰━━━━━━━━━━━━━━━━━━━━━━━━━╯
 
-💡 *Réponds en privé pour ne pas* 
-*être vu par les autres!*
+💡 *Tape ${prefix}permissions pour*
+*voir tes commandes disponibles!*
 `;
 }
 
@@ -881,6 +1026,54 @@ async function handleCommand(hani, msg, db) {
 
   // Incrémenter les stats
   db.incrementStats("commands");
+
+  // ═══════════════════════════════════════════════════════════
+  // 🔐 VÉRIFICATION DES PERMISSIONS
+  // ═══════════════════════════════════════════════════════════
+  
+  // Charger les utilisateurs approuvés depuis la DB
+  const approvedList = db.data?.approved || [];
+  const isApproved = approvedList.includes(senderNumber) || 
+                     approvedList.includes(sender) ||
+                     approvedList.some(n => sender.includes(n)) ||
+                     isOwner || isSudo;
+  
+  // Vérification du niveau d'accès
+  let hasPermission = true;
+  let permissionDeniedReason = "";
+  
+  // 🔒 MODE PRIVATE: Seuls owner et sudo peuvent utiliser le bot
+  if (config.MODE === "private" && !isSudo) {
+    // Quelques commandes restent accessibles en mode private
+    const alwaysAllowed = ["permissions", "myaccess", "mylevel", "whoami", "ping"];
+    if (!alwaysAllowed.includes(command)) {
+      hasPermission = false;
+      permissionDeniedReason = "🔒 *Mode Privé*\n\nLe bot est en mode privé. Seuls le propriétaire et les sudos peuvent l'utiliser.\n\nTape `.permissions` pour voir ton niveau.";
+    }
+  }
+  // 🌍 MODE PUBLIC: Vérifier les niveaux d'accès
+  else if (ownerOnlyCommands.includes(command)) {
+    if (!isOwner) {
+      hasPermission = false;
+      permissionDeniedReason = "⛔ *Accès refusé!*\n\n👑 Cette commande est réservée au *propriétaire* du bot uniquement.";
+    }
+  } else if (sudoCommands.includes(command)) {
+    if (!isSudo) {
+      hasPermission = false;
+      permissionDeniedReason = "⛔ *Accès refusé!*\n\n🛡️ Cette commande est réservée aux *administrateurs* (sudo) du bot.";
+    }
+  } else if (approvedCommands.includes(command)) {
+    if (!isApproved) {
+      hasPermission = false;
+      permissionDeniedReason = "⛔ *Accès refusé!*\n\n✨ Cette commande est réservée aux *utilisateurs approuvés*.\n\nDemande au propriétaire de t'ajouter avec la commande: `.approve`";
+    }
+  }
+  // publicCommands → toujours accessible
+  
+  // Si pas de permission, refuser
+  if (!hasPermission) {
+    return reply(permissionDeniedReason);
+  }
 
   // ═══════════════════════════════════════════════════════════
   // 🎯 COMMANDES
@@ -975,11 +1168,17 @@ Ou utilise: .setowner ${senderNum}` : "✅ Tu es bien reconnu comme owner!"}
 ┃ 👥 Utilisateurs: ${Object.keys(db.data.users).length}
 ┃ 🏘️ Groupes: ${Object.keys(db.data.groups).length}
 ┃
-┃ 🛡️ *Protections actives*
-┃ • Antidelete: ${protectionState.antidelete ? "✅" : "❌"}
-┃ • Anticall: ${protectionState.anticall ? "✅" : "❌"}
+┃ 🛡️ *Protections AUTOMATIQUES*
+┃ • Anti-delete: ${protectionState.antidelete ? "✅" : "❌"}
+┃ • Anti-appel: ${protectionState.anticall ? "✅" : "❌"}
+┃ • Vue unique: ${protectionState.autoViewOnce ? "✅" : "❌"}
+┃ • Vocal unique: ${protectionState.autoViewOnceAudio ? "✅" : "❌"}
+┃ • Save statuts: ${protectionState.autoSaveStatus ? "✅" : "❌"}
+┃ • Anti-delete statut: ${protectionState.antideletestatus ? "✅" : "❌"}
 ┃
 ╰━━━━━━━━━━━━━━━━━━━━━━━━╯
+
+📨 _Tout est envoyé dans "Moi-même"_
 `;
       return send(infoText);
     }
@@ -1412,6 +1611,82 @@ Ou utilise: .setowner ${senderNum}` : "✅ Tu es bien reconnu comme owner!"}
       return send(list);
     }
 
+    // ────────── GESTION DES PROTECTIONS ──────────
+    case "protections":
+    case "protect":
+    case "auto": {
+      let status = `
+🛡️ *PROTECTIONS AUTOMATIQUES*
+━━━━━━━━━━━━━━━━━━━━━
+
+📨 Tout est envoyé dans "Moi-même"
+
+✅ = Activé | ❌ = Désactivé
+
+🗑️ *Anti-delete*: ${protectionState.antidelete ? "✅" : "❌"}
+    └ Messages supprimés interceptés
+
+👁️ *Vue unique*: ${protectionState.autoViewOnce ? "✅" : "❌"}
+    └ Photos/vidéos vue unique
+
+🎤 *Écoute unique*: ${protectionState.autoViewOnceAudio ? "✅" : "❌"}
+    └ Vocaux écoute unique
+
+📸 *Save statuts*: ${protectionState.autoSaveStatus ? "✅" : "❌"}
+    └ Tous les statuts sauvegardés
+
+📸 *Anti-delete statut*: ${protectionState.antideletestatus ? "✅" : "❌"}
+    └ Statuts supprimés interceptés
+
+📵 *Anti-appel*: ${protectionState.anticall ? "✅" : "❌"}
+    └ Appels automatiquement rejetés
+
+🤖 *Anti-bot*: ${protectionState.antibot ? "✅" : "❌"}
+    └ Autres bots WhatsApp bloqués
+    └ Bots bloqués: ${blockedBots.size}
+
+━━━━━━━━━━━━━━━━━━━━━
+💡 *Pour modifier:*
+• ${config.PREFIXE}antidelete [on/off]
+• ${config.PREFIXE}viewonce [on/off]
+• ${config.PREFIXE}audioonce [on/off]
+• ${config.PREFIXE}savestatus [on/off]
+• ${config.PREFIXE}anticall [on/off]
+• ${config.PREFIXE}antibot [on/off]
+• ${config.PREFIXE}blockedbots - Liste des bots bloqués
+`;
+      return send(status);
+    }
+
+    case "viewonce":
+    case "vueunique": {
+      const param = args.toLowerCase();
+      if (param === "on") protectionState.autoViewOnce = true;
+      else if (param === "off") protectionState.autoViewOnce = false;
+      else protectionState.autoViewOnce = !protectionState.autoViewOnce;
+      
+      return send(`👁️ Interception photos/vidéos vue unique ${protectionState.autoViewOnce ? "✅ activée" : "❌ désactivée"}`);
+    }
+
+    case "audioonce":
+    case "vocalone": {
+      const param = args.toLowerCase();
+      if (param === "on") protectionState.autoViewOnceAudio = true;
+      else if (param === "off") protectionState.autoViewOnceAudio = false;
+      else protectionState.autoViewOnceAudio = !protectionState.autoViewOnceAudio;
+      
+      return send(`🎤 Interception vocaux écoute unique ${protectionState.autoViewOnceAudio ? "✅ activée" : "❌ désactivée"}`);
+    }
+
+    case "anticall": {
+      const param = args.toLowerCase();
+      if (param === "on") protectionState.anticall = true;
+      else if (param === "off") protectionState.anticall = false;
+      else protectionState.anticall = !protectionState.anticall;
+      
+      return send(`📵 Anti-appel ${protectionState.anticall ? "✅ activé (appels rejetés)" : "❌ désactivé"}`);
+    }
+
     // ────────── ANTI-DELETE ──────────
     case "antidelete": {
       const param = args.toLowerCase();
@@ -1420,6 +1695,62 @@ Ou utilise: .setowner ${senderNum}` : "✅ Tu es bien reconnu comme owner!"}
       else protectionState.antidelete = !protectionState.antidelete;
       
       return send(`🗑️ Antidelete ${protectionState.antidelete ? "✅ activé" : "❌ désactivé"}`);
+    }
+
+    // ────────── ANTI-BOT ──────────
+    case "antibot": {
+      const param = args.toLowerCase();
+      if (param === "on") protectionState.antibot = true;
+      else if (param === "off") protectionState.antibot = false;
+      else protectionState.antibot = !protectionState.antibot;
+      
+      return send(`🤖 Anti-Bot ${protectionState.antibot ? "✅ activé (autres bots bloqués)" : "❌ désactivé"}`);
+    }
+
+    case "blockedbots":
+    case "listbots": {
+      if (blockedBots.size === 0) return send("📭 Aucun bot bloqué.");
+      
+      let list = "🤖 *Bots bloqués*\n━━━━━━━━━━━━━━━━━━━━━\n\n";
+      let i = 1;
+      for (const bot of blockedBots) {
+        list += `${i}. ${formatPhoneNumber(bot.split("@")[0])}\n`;
+        i++;
+      }
+      list += `\n💡 Pour débloquer: *.unblockbot <numéro>*`;
+      return send(list);
+    }
+
+    case "unblockbot": {
+      if (!args) return send("❌ Usage: .unblockbot <numéro>\nExemple: .unblockbot 2250710070612");
+      
+      const numToUnblock = args.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+      
+      if (blockedBots.has(numToUnblock)) {
+        blockedBots.delete(numToUnblock);
+        try {
+          await hani.updateBlockStatus(numToUnblock, "unblock");
+          return send(`✅ Bot ${formatPhoneNumber(args.replace(/[^0-9]/g, ""))} débloqué!`);
+        } catch (e) {
+          return send(`⚠️ Retiré de la liste mais erreur déblocage WhatsApp: ${e.message}`);
+        }
+      } else {
+        return send(`❌ Ce numéro n'est pas dans la liste des bots bloqués.`);
+      }
+    }
+
+    case "blockbot": {
+      if (!args) return send("❌ Usage: .blockbot <numéro>\nExemple: .blockbot 2250710070612");
+      
+      const numToBlock = args.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+      blockedBots.add(numToBlock);
+      
+      try {
+        await hani.updateBlockStatus(numToBlock, "block");
+        return send(`🤖 Bot ${formatPhoneNumber(args.replace(/[^0-9]/g, ""))} bloqué!`);
+      } catch (e) {
+        return send(`⚠️ Ajouté à la liste mais erreur blocage WhatsApp: ${e.message}`);
+      }
     }
 
     case "deleted":
@@ -1822,6 +2153,99 @@ Si la personne a masqué sa photo pour tous,
       return hani.sendMessage(from, { text: list, mentions: db.data.sudo });
     }
 
+    // ────────── ✅ GESTION DES UTILISATEURS APPROUVÉS ──────────
+    case "approve":
+    case "addapprove": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      let targetNumber = args?.replace(/[^0-9]/g, "");
+      let target = mentioned[0] || quotedParticipant;
+      
+      if (!target && !targetNumber) {
+        return send(`❌ *Usage:* .approve [numéro ou @mention]
+        
+📱 *Exemples:*
+• .approve 2250150252467
+• .approve @mention
+• Réponds à un message avec .approve
+
+✨ *Info:* Les utilisateurs approuvés peuvent utiliser des commandes comme GPT, DALL-E, téléchargements, etc.`);
+      }
+      
+      if (!target && targetNumber) {
+        target = targetNumber + "@s.whatsapp.net";
+      }
+      
+      const targetNum = target.split("@")[0];
+      if (db.addApproved(targetNum)) {
+        return hani.sendMessage(from, { 
+          text: `✅ *Utilisateur approuvé!*\n\n📱 @${targetNum}\n\n✨ Il/Elle peut maintenant utiliser les commandes IA, téléchargements et plus!`, 
+          mentions: [target] 
+        });
+      } else {
+        return send(`⚠️ @${targetNum} est déjà approuvé.`);
+      }
+    }
+
+    case "unapprove":
+    case "removeapprove":
+    case "delapprove": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      let targetNumber = args?.replace(/[^0-9]/g, "");
+      let target = mentioned[0] || quotedParticipant;
+      
+      if (!target && !targetNumber) {
+        return send(`❌ *Usage:* .unapprove [numéro ou @mention]`);
+      }
+      
+      if (!target && targetNumber) {
+        target = targetNumber + "@s.whatsapp.net";
+      }
+      
+      const targetNum = target.split("@")[0];
+      if (db.removeApproved(targetNum)) {
+        return hani.sendMessage(from, { 
+          text: `✅ *Accès retiré!*\n\n📱 @${targetNum} n'est plus approuvé.`, 
+          mentions: [target] 
+        });
+      } else {
+        return send(`⚠️ @${targetNum} n'était pas dans la liste des approuvés.`);
+      }
+    }
+
+    case "approved":
+    case "approvelist":
+    case "approvedlist": {
+      if (!isSudo) return send("❌ Commande réservée aux sudos.");
+      
+      const approvedList = db.getApprovedList();
+      
+      if (approvedList.length === 0) {
+        return send(`📭 *Aucun utilisateur approuvé*
+
+✨ Utilise \`.approve @mention\` pour ajouter quelqu'un.
+
+👥 *Niveaux d'accès:*
+• 👑 *Owner:* Accès total
+• 🛡️ *Sudo:* Commandes admin
+• ✅ *Approuvé:* IA, downloads, jeux
+• 👤 *Public:* Menu, ping, sticker`);
+      }
+      
+      let list = `✅ *Utilisateurs Approuvés (${approvedList.length})*\n\n`;
+      const jidList = [];
+      approvedList.forEach((num, i) => {
+        const jid = num.includes("@") ? num : num + "@s.whatsapp.net";
+        jidList.push(jid);
+        list += `${i + 1}. @${num.replace("@s.whatsapp.net", "")}\n`;
+      });
+      
+      list += `\n👑 Pour retirer: \`.unapprove @mention\``;
+      
+      return hani.sendMessage(from, { text: list, mentions: jidList });
+    }
+
     case "anticall": {
       if (!isSudo) return send("❌ Commande réservée aux sudos.");
       
@@ -1838,6 +2262,86 @@ Si la personne a masqué sa photo pour tous,
       
       await send("🔄 Redémarrage en cours...");
       process.exit(0);
+    }
+
+    // ────────── 🔐 MODE & PERMISSIONS ──────────
+    case "mode": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      const param = args?.toLowerCase();
+      
+      if (param === "public") {
+        config.MODE = "public";
+        return send(`🌍 *Mode PUBLIC activé!*
+
+✅ Tout le monde peut utiliser le bot selon son niveau:
+• 👑 *Owner:* Accès total
+• 🛡️ *Sudo:* Commandes admin
+• ✅ *Approuvé:* IA, downloads, jeux
+• 👤 *Public:* Menu, ping, sticker
+
+💡 Utilise \`.approve @user\` pour donner plus d'accès.`);
+      } else if (param === "private") {
+        config.MODE = "private";
+        return send(`🔒 *Mode PRIVATE activé!*
+
+⛔ Seuls l'Owner et les Sudos peuvent utiliser le bot.
+
+💡 Utilise \`.mode public\` pour permettre l'accès aux autres.`);
+      } else {
+        return send(`🔐 *Mode actuel: ${config.MODE.toUpperCase()}*
+
+*Usage:* \`.mode public\` ou \`.mode private\`
+
+• *Public:* Tout le monde selon son niveau
+• *Private:* Owner et Sudo uniquement`);
+      }
+    }
+
+    case "permissions":
+    case "myaccess":
+    case "mylevel": {
+      // Cette commande est accessible à tous
+      const approvedList = db.getApprovedList();
+      const userNum = senderNumber;
+      
+      let level = "👤 *PUBLIC*";
+      let description = "Tu peux utiliser les commandes de base (menu, ping, sticker, info).";
+      let commands = "`.menu`, `.ping`, `.sticker`, `.info`";
+      
+      if (isOwner) {
+        level = "👑 *OWNER*";
+        description = "Tu es le PROPRIÉTAIRE du bot. Tu as accès à TOUTES les commandes!";
+        commands = "Toutes les commandes sans restriction.";
+      } else if (isSudo) {
+        level = "🛡️ *SUDO*";
+        description = "Tu es administrateur du bot. Tu as accès aux commandes de gestion.";
+        commands = "Gestion groupe, kick, ban, protections, + commandes approuvés.";
+      } else if (db.isApproved(userNum)) {
+        level = "✅ *APPROUVÉ*";
+        description = "Tu es approuvé par l'owner. Tu as accès aux fonctionnalités avancées.";
+        commands = "IA (GPT, DALL-E), téléchargements, jeux, conversions, + commandes publiques.";
+      }
+      
+      return send(`╭━━━ 🔐 *TON NIVEAU D'ACCÈS* ━━━╮
+┃
+┃ ${level}
+┃
+┃ 📋 *Description:*
+┃ ${description}
+┃
+┃ 🎯 *Commandes disponibles:*
+┃ ${commands}
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━━━━━╯
+
+📊 *Hiérarchie du bot:*
+• 👑 Owner → Accès total
+• 🛡️ Sudo → Admin du bot
+• ✅ Approuvé → Accès avancé
+• 👤 Public → Accès basique
+
+${!isOwner && !isSudo && !db.isApproved(userNum) ? "\n💡 *Tip:* Demande à l'owner de t'approuver pour plus d'accès!" : ""}`);
     }
 
     // ────────── 🚫 BLOCAGE WHATSAPP ──────────
@@ -2528,17 +3032,46 @@ async function startBot() {
 
     if (qr) {
       reconnectAttempts = 0; // Reset quand on affiche le QR
+      
+      // Stocker le QR pour l'affichage web
+      qrState.currentQR = qr;
+      qrState.lastUpdate = Date.now();
+      qrState.connectionStatus = "waiting_qr";
+      qrState.qrCount++;
+      
+      // Générer le QR en image base64 pour le web
+      try {
+        qrState.qrDataURL = await qrcodeWeb.toDataURL(qr, {
+          width: 300,
+          margin: 2,
+          color: { dark: "#000000", light: "#ffffff" }
+        });
+      } catch (e) {
+        console.log("⚠️ Erreur génération QR image:", e.message);
+      }
+      
       console.log("\n📱 SCANNE CE QR CODE AVEC WHATSAPP:\n");
       qrcode.generate(qr, { small: true });
-      console.log("\n⏳ Tu as 60 secondes pour scanner...\n");
+      console.log("\n⏳ Tu as 60 secondes pour scanner...");
+      console.log(`🌐 Ou va sur: http://localhost:${process.env.PORT || 3000}/qr\n`);
     }
 
     if (connection === "connecting") {
+      qrState.connectionStatus = "connecting";
       console.log("🔄 Connexion en cours...");
     }
 
     if (connection === "open") {
       isConnected = true;
+      qrState.isConnected = true;
+      qrState.connectionStatus = "connected";
+      qrState.currentQR = null;
+      qrState.qrDataURL = null;
+      qrState.botInfo = {
+        name: hani.user?.name || "HANI-MD",
+        number: hani.user?.id?.split(":")[0] || "",
+        connectedAt: new Date().toISOString()
+      };
       reconnectAttempts = 0;
       
       // Sauvegarder immédiatement après connexion réussie
@@ -2565,7 +3098,17 @@ async function startBot() {
 ║  ⚙️  Préfixe: ${config.PREFIXE.padEnd(42)}║
 ║  🌐 Mode: ${config.MODE.padEnd(46)}║
 ╠═══════════════════════════════════════════════════════════╣
+║  🛡️ PROTECTIONS AUTOMATIQUES ACTIVÉES:                   ║
+║    ✅ Anti-delete messages                                ║
+║    ✅ Vue unique photos/vidéos                            ║
+║    ✅ Écoute unique vocaux                                ║
+║    ✅ Sauvegarde automatique statuts                      ║
+║    ✅ Anti-suppression statuts                            ║
+║    ✅ Anti-appel                                          ║
+║    ✅ Anti-bot (bloque autres bots)                       ║
+╠═══════════════════════════════════════════════════════════╣
 ║  💡 Tape ${config.PREFIXE}menu pour voir les commandes              ║
+║  📨 Tout est envoyé automatiquement dans "Moi-même"       ║
 ╚═══════════════════════════════════════════════════════════╝
 `);
       db.data.stats.startTime = Date.now();
@@ -2574,6 +3117,10 @@ async function startBot() {
 
     if (connection === "close") {
       isConnected = false;
+      qrState.isConnected = false;
+      qrState.connectionStatus = "disconnected";
+      qrState.botInfo = null;
+      
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const reason = lastDisconnect?.error?.message || "Inconnue";
 
@@ -2637,24 +3184,88 @@ async function startBot() {
       const botNumber = hani.user?.id?.split(":")[0] + "@s.whatsapp.net";
       const senderName = msg.pushName || "Inconnu";
       
-      // 🔍 DÉBOGAGE COMPLET: Afficher TOUS les types de messages
+      // 🔍 DÉBOGAGE ULTRA-COMPLET: Afficher STRUCTURE de tous les messages
       const msgType = getContentType(msg.message);
       const msgKeys = Object.keys(msg.message || {});
       
+      // Log spécial pour les audios et vocaux (TOUJOURS)
+      if (!msg.key.fromMe) {
+        const containsAudio = msgKeys.some(k => k.toLowerCase().includes("audio") || k.toLowerCase().includes("ptt"));
+        const containsViewOnce = msgKeys.some(k => k.toLowerCase().includes("viewonce"));
+        
+        if (containsAudio || containsViewOnce) {
+          console.log(`\n🔴 ══════════════════════════════════════════`);
+          console.log(`🔴 MESSAGE AUDIO/VIEWONCE REÇU - STRUCTURE COMPLÈTE:`);
+          console.log(`🔴 De: ${sender?.split("@")[0]} (${senderName})`);
+          console.log(`🔴 Type principal: ${msgType}`);
+          console.log(`🔴 Keys niveau 1: ${msgKeys.join(", ")}`);
+          
+          // Explorer chaque clé
+          for (const key of msgKeys) {
+            if (key === "messageContextInfo") continue; // Skip les métadonnées
+            const value = msg.message[key];
+            if (typeof value === "object" && value !== null) {
+              const subKeys = Object.keys(value);
+              console.log(`🔴   ${key} → ${subKeys.join(", ")}`);
+              // Si c'est un viewOnce, explorer plus
+              if (key.includes("viewOnce") && value.message) {
+                const innerKeys = Object.keys(value.message);
+                console.log(`🔴     message → ${innerKeys.join(", ")}`);
+                for (const ik of innerKeys) {
+                  if (typeof value.message[ik] === "object") {
+                    console.log(`🔴       ${ik} → ${Object.keys(value.message[ik]).join(", ")}`);
+                  }
+                }
+              }
+              // Si c'est un audio, montrer les propriétés
+              if (key.includes("audio") || key.includes("ptt")) {
+                console.log(`🔴     viewOnce: ${value.viewOnce}`);
+                console.log(`🔴     ptt: ${value.ptt}`);
+                console.log(`🔴     seconds: ${value.seconds}`);
+                console.log(`🔴     mimetype: ${value.mimetype}`);
+              }
+            }
+          }
+          console.log(`🔴 ══════════════════════════════════════════\n`);
+        }
+      }
+      
       // Log pour TOUS les messages non-texte ou vides
       if (!msg.key.fromMe) {
-        // Vérifier si c'est un viewOnce
+        // Vérifier TOUS les formats possibles de viewOnce
         const hasViewOnce = msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2 || msg.message?.viewOnceMessageV2Extension;
         const hasAudioViewOnce = msg.message?.audioMessage?.viewOnce;
+        const hasPttViewOnce = msg.message?.pttMessage?.viewOnce;
         
-        if (hasViewOnce || hasAudioViewOnce || (msgType !== "extendedTextMessage" && msgType !== "conversation")) {
+        // Vérifier si c'est un vocal (pour débogage)
+        const isAudioType = msgType === "audioMessage" || msgType === "pttMessage" || 
+                           msgKeys.includes("audioMessage") || msgKeys.includes("pttMessage");
+        
+        if (hasViewOnce || hasAudioViewOnce || hasPttViewOnce || isAudioType || 
+            (msgType !== "extendedTextMessage" && msgType !== "conversation" && msgType !== "reactionMessage")) {
           console.log(`📨 [MSG REÇU] Type: ${msgType}`);
           console.log(`   Keys: ${msgKeys.join(", ")}`);
           console.log(`   De: ${sender?.split("@")[0]}`);
-          console.log(`   ViewOnce: ${!!hasViewOnce} | AudioViewOnce: ${!!hasAudioViewOnce}`);
+          console.log(`   ViewOnce: ${!!hasViewOnce} | AudioViewOnce: ${!!hasAudioViewOnce} | PttViewOnce: ${!!hasPttViewOnce}`);
+          
+          // Débogage détaillé pour viewOnce
           if (hasViewOnce) {
             const voContent = hasViewOnce;
             console.log(`   ViewOnce Content Keys: ${Object.keys(voContent).join(", ")}`);
+            if (voContent.message) {
+              const innerKeys = Object.keys(voContent.message);
+              console.log(`   Inner Message Keys: ${innerKeys.join(", ")}`);
+              // Si c'est un audio dans viewOnce
+              if (innerKeys.includes("audioMessage") || innerKeys.includes("pttMessage")) {
+                console.log(`   🎤 VOCAL VUE UNIQUE DÉTECTÉ dans viewOnce!`);
+              }
+            }
+          }
+          
+          // Débogage pour audio/ptt direct
+          if (isAudioType) {
+            const audio = msg.message?.audioMessage || msg.message?.pttMessage;
+            console.log(`   🎤 Audio direct - viewOnce: ${audio?.viewOnce}, ptt: ${audio?.ptt}, seconds: ${audio?.seconds}`);
           }
         }
       }
@@ -2668,98 +3279,208 @@ async function startBot() {
       }
       
       // ═══════════════════════════════════════════════════════════
+      // 🤖 PROTECTION ANTI-BOT - Bloquer les autres bots WhatsApp
+      // ═══════════════════════════════════════════════════════════
+      if (protectionState.antibot && !msg.key.fromMe && from !== "status@broadcast") {
+        // Extraire le texte du message
+        const msgContent = msg.message?.conversation || 
+                          msg.message?.extendedTextMessage?.text ||
+                          msg.message?.imageMessage?.caption ||
+                          msg.message?.videoMessage?.caption || "";
+        
+        // Vérifier si c'est un message de bot
+        let isBotMessage = false;
+        let matchedPattern = "";
+        
+        for (const pattern of botPatterns) {
+          if (pattern.test(msgContent)) {
+            isBotMessage = true;
+            matchedPattern = pattern.toString();
+            break;
+          }
+        }
+        
+        // Détection supplémentaire: messages très stylisés avec caractères spéciaux
+        const hasStylizedChars = /[╭╮╰╯┃┏┓┗┛━─│├┤┬┴┼]/g.test(msgContent);
+        const hasManySpecialChars = (msgContent.match(/[✮✦✧★☆⭐🌟💫✨]/g) || []).length > 3;
+        const hasMenuStructure = /menu|allmenu|ᴍᴇɴᴜ/i.test(msgContent) && hasStylizedChars;
+        
+        if (!isBotMessage && hasMenuStructure && hasManySpecialChars) {
+          isBotMessage = true;
+          matchedPattern = "Menu structure + styled chars";
+        }
+        
+        // Si le numéro est déjà connu comme bot
+        if (blockedBots.has(sender)) {
+          isBotMessage = true;
+          matchedPattern = "Previously identified bot";
+        }
+        
+        if (isBotMessage) {
+          console.log(`\n🤖 ══════════════════════════════════════════`);
+          console.log(`🤖 BOT DÉTECTÉ ET BLOQUÉ!`);
+          console.log(`🤖 Numéro: ${sender?.split("@")[0]}`);
+          console.log(`🤖 Pattern: ${matchedPattern}`);
+          console.log(`🤖 ══════════════════════════════════════════\n`);
+          
+          // Ajouter à la liste des bots bloqués
+          blockedBots.add(sender);
+          
+          // Notifier le owner
+          const botNumber = hani.user?.id?.split(":")[0] + "@s.whatsapp.net";
+          const alertMsg = `🤖 *BOT DÉTECTÉ ET BLOQUÉ!*\n━━━━━━━━━━━━━━━━━━━━━\n\n📱 *Numéro:* ${formatPhoneNumber(sender.split("@")[0])}\n👤 *Nom:* ${senderName}\n🔍 *Pattern:* ${matchedPattern}\n🕐 *Heure:* ${new Date().toLocaleString("fr-FR")}\n\n⚠️ Ce numéro est maintenant bloqué.\n\n💡 Pour débloquer: *.unblockbot ${sender.split("@")[0]}*`;
+          
+          await hani.sendMessage(botNumber, { text: alertMsg });
+          
+          // Bloquer le contact sur WhatsApp
+          try {
+            await hani.updateBlockStatus(sender, "block");
+            console.log(`✅ Bot ${sender.split("@")[0]} bloqué sur WhatsApp`);
+          } catch (e) {
+            console.log(`⚠️ Erreur blocage: ${e.message}`);
+          }
+          
+          return; // Ne pas traiter le message plus loin
+        }
+      }
+      
+      // ═══════════════════════════════════════════════════════════
       // 👁️ INTERCEPTION AUTOMATIQUE DES VUES UNIQUES (Photos/Vidéos/Vocaux)
       // ═══════════════════════════════════════════════════════════
       
-      // 1. Vues uniques classiques (photos/vidéos)
+      // 1. Vues uniques classiques (photos/vidéos/audios)
       const viewOnceContent = msg.message?.viewOnceMessage || msg.message?.viewOnceMessageV2 || msg.message?.viewOnceMessageV2Extension;
+      
+      // DÉBOGAGE: Afficher tous les types de viewOnce détectés
+      if (viewOnceContent) {
+        console.log(`🔍 [VIEW-ONCE DEBUG] Contenu détecté!`);
+        console.log(`   Message keys: ${Object.keys(msg.message || {}).join(", ")}`);
+        console.log(`   ViewOnce keys: ${Object.keys(viewOnceContent || {}).join(", ")}`);
+        if (viewOnceContent.message) {
+          console.log(`   Inner message keys: ${Object.keys(viewOnceContent.message || {}).join(", ")}`);
+        }
+      }
+      
       if (viewOnceContent && !msg.key.fromMe) {
         const mediaMsg = viewOnceContent.message;
         const mediaType = Object.keys(mediaMsg || {})[0] || "inconnu";
         
-        console.log(`👁️ Vue unique DÉTECTÉE de ${sender.split("@")[0]} (${mediaType})`);
+        // Déterminer si c'est un audio/vocal
+        const isAudio = mediaType === "audioMessage" || mediaType === "pttMessage";
+        const isImage = mediaType === "imageMessage";
+        const isVideo = mediaType === "videoMessage";
         
-        // Stocker le message complet
-        viewOnceMessages.set(msg.key.id, {
-          sender: sender,
-          from: from,
-          type: mediaType.replace("Message", ""),
-          date: new Date().toLocaleString("fr-FR"),
-          message: msg,
-          mediaMessage: mediaMsg
-        });
+        console.log(`👁️ VUE UNIQUE DÉTECTÉE de ${sender.split("@")[0]}`);
+        console.log(`   Type: ${mediaType} | Audio: ${isAudio} | Image: ${isImage} | Video: ${isVideo}`);
         
-        if (viewOnceMessages.size > 50) {
-          viewOnceMessages.delete(viewOnceMessages.keys().next().value);
-        }
+        // Vérifier les protections appropriées
+        const shouldIntercept = isAudio ? protectionState.autoViewOnceAudio : protectionState.autoViewOnce;
         
-        // AUTOMATIQUEMENT télécharger et envoyer en privé
-        try {
-          // Créer un message formaté pour le téléchargement
-          const downloadMsg = {
-            key: msg.key,
-            message: mediaMsg // Utiliser le message interne, pas viewOnceContent
-          };
+        if (!shouldIntercept) {
+          console.log(`   ⏭️ Interception désactivée pour ce type`);
+        } else {
+          console.log(`   ✅ Interception en cours...`);
           
-          const stream = await downloadMediaMessage(
-            downloadMsg,
-            "buffer",
-            {},
-            { logger: pino({ level: "silent" }), reuploadRequest: hani.updateMediaMessage }
-          );
+          // Stocker le message complet
+          viewOnceMessages.set(msg.key.id, {
+            sender: sender,
+            from: from,
+            type: mediaType.replace("Message", ""),
+            date: new Date().toLocaleString("fr-FR"),
+            message: msg,
+            mediaMessage: mediaMsg
+          });
           
-          if (stream && stream.length > 0) {
-            const media = mediaMsg[mediaType];
-            const caption = `👁️ *VUE UNIQUE INTERCEPTÉE!*\n━━━━━━━━━━━━━━━━━━━━━\n\n👤 *De:* ${msg.pushName || sender.split("@")[0]}\n📱 *Numéro:* ${formatPhoneNumber(sender.split("@")[0])}\n💬 *Chat:* ${from.endsWith("@g.us") ? "Groupe" : "Privé"}\n🕐 *Heure:* ${new Date().toLocaleString("fr-FR")}\n${media?.caption ? `\n📝 *Légende:* ${media.caption}` : ""}`;
-            
-            if (mediaType === "imageMessage") {
-              await hani.sendMessage(botNumber, { image: stream, caption });
-              console.log(`✅ Image vue unique envoyée à Moi-même`);
-            } else if (mediaType === "videoMessage") {
-              await hani.sendMessage(botNumber, { video: stream, caption });
-              console.log(`✅ Vidéo vue unique envoyée à Moi-même`);
-            } else if (mediaType === "audioMessage") {
-              await hani.sendMessage(botNumber, { audio: stream, mimetype: media?.mimetype || "audio/mp4", ptt: media?.ptt || false });
-              await hani.sendMessage(botNumber, { text: caption });
-              console.log(`✅ Audio vue unique envoyé à Moi-même`);
-            }
-          } else {
-            console.log(`⚠️ Échec téléchargement vue unique: buffer vide`);
+          if (viewOnceMessages.size > 50) {
+            viewOnceMessages.delete(viewOnceMessages.keys().next().value);
           }
-        } catch (e) {
-          console.log(`⚠️ Erreur sauvegarde auto vue unique: ${e.message}`);
-          // Fallback: essayer avec le message original
+          
+          // AUTOMATIQUEMENT télécharger et envoyer en privé
           try {
-            const stream2 = await downloadMediaMessage(
-              msg,
+            // Créer un message formaté pour le téléchargement
+            const downloadMsg = {
+              key: msg.key,
+              message: mediaMsg // Utiliser le message interne, pas viewOnceContent
+            };
+            
+            const stream = await downloadMediaMessage(
+              downloadMsg,
               "buffer",
               {},
               { logger: pino({ level: "silent" }), reuploadRequest: hani.updateMediaMessage }
             );
-            if (stream2 && stream2.length > 0) {
+            
+            if (stream && stream.length > 0) {
+              console.log(`   📦 Buffer téléchargé: ${stream.length} bytes`);
               const media = mediaMsg[mediaType];
-              const caption = `👁️ *VUE UNIQUE INTERCEPTÉE!*\n━━━━━━━━━━━━━━━━━━━━━\n\n👤 *De:* ${msg.pushName || sender.split("@")[0]}\n📱 *Numéro:* ${formatPhoneNumber(sender.split("@")[0])}\n🕐 *Heure:* ${new Date().toLocaleString("fr-FR")}`;
+              const typeLabel = isAudio ? "🎤 VOCAL" : (isVideo ? "🎬 VIDÉO" : "📸 IMAGE");
+              const caption = `${typeLabel} *VUE UNIQUE INTERCEPTÉ(E)!*\n━━━━━━━━━━━━━━━━━━━━━\n\n👤 *De:* ${msg.pushName || sender.split("@")[0]}\n📱 *Numéro:* ${formatPhoneNumber(sender.split("@")[0])}\n💬 *Chat:* ${from.endsWith("@g.us") ? "Groupe" : "Privé"}\n🕐 *Heure:* ${new Date().toLocaleString("fr-FR")}\n${media?.caption ? `\n📝 *Légende:* ${media.caption}` : ""}`;
               
-              if (mediaType === "imageMessage") {
-                await hani.sendMessage(botNumber, { image: stream2, caption });
-              } else if (mediaType === "videoMessage") {
-                await hani.sendMessage(botNumber, { video: stream2, caption });
+              if (isImage) {
+                await hani.sendMessage(botNumber, { image: stream, caption });
+                console.log(`✅ Image vue unique envoyée à Moi-même`);
+              } else if (isVideo) {
+                await hani.sendMessage(botNumber, { video: stream, caption });
+                console.log(`✅ Vidéo vue unique envoyée à Moi-même`);
+              } else if (isAudio) {
+                // Envoyer le vocal comme PTT
+                await hani.sendMessage(botNumber, { 
+                  audio: stream, 
+                  mimetype: media?.mimetype || "audio/ogg; codecs=opus",
+                  ptt: true // Toujours comme vocal
+                });
+                await hani.sendMessage(botNumber, { text: caption });
+                console.log(`✅ Vocal vue unique envoyé à Moi-même`);
               }
-              console.log(`✅ Vue unique envoyée (fallback)`);
+            } else {
+              console.log(`⚠️ Échec téléchargement vue unique: buffer vide`);
             }
-          } catch (e2) {
-            console.log(`⚠️ Fallback aussi échoué: ${e2.message}`);
+          } catch (e) {
+            console.log(`⚠️ Erreur téléchargement vue unique: ${e.message}`);
+            // Fallback: essayer avec le message original
+            try {
+              console.log(`   🔄 Tentative fallback avec message original...`);
+              const stream2 = await downloadMediaMessage(
+                msg,
+                "buffer",
+                {},
+                { logger: pino({ level: "silent" }), reuploadRequest: hani.updateMediaMessage }
+              );
+              if (stream2 && stream2.length > 0) {
+                console.log(`   📦 Fallback buffer: ${stream2.length} bytes`);
+                const media = mediaMsg[mediaType];
+                const typeLabel = isAudio ? "🎤 VOCAL" : (isVideo ? "🎬 VIDÉO" : "📸 IMAGE");
+                const caption = `${typeLabel} *VUE UNIQUE INTERCEPTÉ(E)!*\n━━━━━━━━━━━━━━━━━━━━━\n\n👤 *De:* ${msg.pushName || sender.split("@")[0]}\n📱 *Numéro:* ${formatPhoneNumber(sender.split("@")[0])}\n🕐 *Heure:* ${new Date().toLocaleString("fr-FR")}`;
+                
+                if (isImage) {
+                  await hani.sendMessage(botNumber, { image: stream2, caption });
+                } else if (isVideo) {
+                  await hani.sendMessage(botNumber, { video: stream2, caption });
+                } else if (isAudio) {
+                  await hani.sendMessage(botNumber, { 
+                    audio: stream2, 
+                    mimetype: media?.mimetype || "audio/ogg; codecs=opus",
+                    ptt: true
+                  });
+                  await hani.sendMessage(botNumber, { text: caption });
+                }
+                console.log(`✅ Vue unique envoyée (fallback)`);
+              }
+            } catch (e2) {
+              console.log(`⚠️ Fallback aussi échoué: ${e2.message}`);
+            }
           }
         }
       }
       
-      // 2. Vocaux "écoute unique" (ptt viewOnce / audio avec viewOnce)
+      // 2. Vocaux "écoute unique" en format direct (non viewOnce wrapper) - Format alternatif
       const audioMsg = msg.message?.audioMessage;
       const pttMsg = msg.message?.pttMessage; // Format alternatif pour les vocaux
       
-      // Vérifier les deux formats possibles de vocal écoute unique
-      if ((audioMsg?.viewOnce || pttMsg?.viewOnce) && !msg.key.fromMe) {
+      // Vérifier les deux formats possibles de vocal écoute unique (format direct avec viewOnce flag)
+      if ((audioMsg?.viewOnce || pttMsg?.viewOnce) && !msg.key.fromMe && protectionState.autoViewOnceAudio) {
         const voiceMsg = audioMsg || pttMsg;
+        console.log(`🎤 VOCAL ÉCOUTE UNIQUE (FORMAT DIRECT) détecté de ${sender.split("@")[0]}`);
         console.log(`🎤 VOCAL ÉCOUTE UNIQUE DÉTECTÉ de ${sender.split("@")[0]}`);
         
         // AUTOMATIQUEMENT télécharger et envoyer en privé
@@ -3191,11 +3912,36 @@ async function startBot() {
     for (const call of calls || []) {
       if (call.status === "offer") {
         try {
+          // Rejeter l'appel
           await hani.rejectCall(call.id, call.from);
-          await hani.sendMessage(call.from, { 
-            text: "❌ Les appels sont désactivés sur HANI-MD.\n📩 Envoie un message à la place!" 
-          });
-        } catch (e) {}
+          
+          // Envoyer un message personnalisé à la personne qui appelle
+          const callerNumber = call.from?.split("@")[0] || "";
+          const callerName = getCachedContactName(call.from) || formatPhoneNumber(callerNumber);
+          const callType = call.isVideo ? "vidéo" : "vocal";
+          
+          const message = `📵 *Appel ${callType} refusé*
+━━━━━━━━━━━━━━━━━━━━━
+
+👋 Salut ${callerName}!
+
+Je ne suis pas disponible pour les appels pour le moment.
+
+📩 *Envoie-moi plutôt un message*, je te répondrai dès que possible!
+
+_Ce message a été envoyé automatiquement._`;
+          
+          await hani.sendMessage(call.from, { text: message });
+          
+          // Notifier le propriétaire dans "Moi-même"
+          const botNumber = hani.user?.id?.split(":")[0] + "@s.whatsapp.net";
+          const notif = `📵 *Appel ${callType} rejeté*\n\n👤 De: ${callerName}\n📱 ${formatPhoneNumber(callerNumber)}\n🕐 ${new Date().toLocaleString("fr-FR")}`;
+          await hani.sendMessage(botNumber, { text: notif });
+          
+          console.log(`📵 Appel ${callType} rejeté de ${callerName}`);
+        } catch (e) {
+          console.log(`⚠️ Erreur anti-call: ${e.message}`);
+        }
       }
     }
   });
@@ -3204,49 +3950,375 @@ async function startBot() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// 🌐 SERVEUR WEB (KEEP ALIVE)
+// 🌐 SERVEUR WEB AVEC QR CODE
 // ═══════════════════════════════════════════════════════════
 
 const express = require("express");
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Middleware pour JSON
+app.use(express.json());
+
 // Health check pour Render
 app.get("/health", (req, res) => {
-  res.status(200).json({ status: "ok", uptime: process.uptime() });
+  res.status(200).json({ 
+    status: "ok", 
+    uptime: process.uptime(),
+    connected: qrState.isConnected,
+    connectionStatus: qrState.connectionStatus
+  });
 });
 
+// API pour obtenir l'état du QR (pour AJAX)
+app.get("/api/qr-status", (req, res) => {
+  res.json({
+    status: qrState.connectionStatus,
+    isConnected: qrState.isConnected,
+    hasQR: !!qrState.qrDataURL,
+    qrDataURL: qrState.qrDataURL,
+    lastUpdate: qrState.lastUpdate,
+    qrCount: qrState.qrCount,
+    botInfo: qrState.botInfo
+  });
+});
+
+// 📱 PAGE QR CODE PRINCIPALE
+app.get("/qr", (req, res) => {
+  res.send(`
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HANI-MD - Scanner QR Code</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+    .container {
+      background: rgba(255,255,255,0.1);
+      backdrop-filter: blur(10px);
+      border-radius: 24px;
+      padding: 40px;
+      max-width: 450px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .logo { font-size: 3em; margin-bottom: 10px; }
+    h1 { color: #fff; font-size: 2em; margin-bottom: 5px; }
+    .subtitle { color: #aaa; font-size: 0.9em; margin-bottom: 30px; }
+    
+    .qr-container {
+      background: white;
+      border-radius: 16px;
+      padding: 20px;
+      margin: 20px 0;
+      min-height: 300px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .qr-container img { max-width: 100%; border-radius: 8px; }
+    
+    .status {
+      padding: 12px 24px;
+      border-radius: 50px;
+      font-weight: bold;
+      margin: 20px 0;
+      display: inline-block;
+    }
+    .status.waiting { background: #ff9800; color: #000; }
+    .status.connecting { background: #2196F3; color: #fff; }
+    .status.connected { background: #4CAF50; color: #fff; }
+    .status.disconnected { background: #f44336; color: #fff; }
+    
+    .instructions {
+      background: rgba(255,255,255,0.05);
+      border-radius: 12px;
+      padding: 20px;
+      margin-top: 20px;
+      text-align: left;
+    }
+    .instructions h3 { color: #fff; margin-bottom: 15px; font-size: 1.1em; }
+    .instructions ol { color: #ccc; padding-left: 20px; }
+    .instructions li { margin: 10px 0; line-height: 1.5; }
+    
+    .bot-info {
+      background: rgba(76, 175, 80, 0.2);
+      border: 1px solid #4CAF50;
+      border-radius: 12px;
+      padding: 20px;
+      margin-top: 20px;
+    }
+    .bot-info h3 { color: #4CAF50; margin-bottom: 10px; }
+    .bot-info p { color: #fff; margin: 5px 0; }
+    
+    .loader {
+      width: 50px;
+      height: 50px;
+      border: 4px solid rgba(255,255,255,0.1);
+      border-left-color: #fff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    
+    .refresh-timer {
+      color: #888;
+      font-size: 0.8em;
+      margin-top: 10px;
+    }
+    
+    .footer {
+      margin-top: 30px;
+      color: #666;
+      font-size: 0.8em;
+    }
+    .footer a { color: #9c27b0; text-decoration: none; }
+    
+    @media (max-width: 500px) {
+      .container { padding: 20px; }
+      .logo { font-size: 2em; }
+      h1 { font-size: 1.5em; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">🌟</div>
+    <h1>HANI-MD</h1>
+    <p class="subtitle">Bot WhatsApp Intelligent</p>
+    
+    <div id="status-container">
+      <div class="status disconnected" id="status-badge">Chargement...</div>
+    </div>
+    
+    <div class="qr-container" id="qr-container">
+      <div class="loader"></div>
+    </div>
+    
+    <div id="instructions" class="instructions">
+      <h3>📱 Comment connecter ton WhatsApp :</h3>
+      <ol>
+        <li>Ouvre <strong>WhatsApp</strong> sur ton téléphone</li>
+        <li>Va dans <strong>Paramètres → Appareils connectés</strong></li>
+        <li>Appuie sur <strong>"Connecter un appareil"</strong></li>
+        <li>Scanne le <strong>QR code</strong> ci-dessus</li>
+      </ol>
+    </div>
+    
+    <div id="bot-info" class="bot-info" style="display:none;">
+      <h3>✅ Bot Connecté!</h3>
+      <p id="bot-name"></p>
+      <p id="bot-number"></p>
+    </div>
+    
+    <p class="refresh-timer" id="timer">Actualisation automatique...</p>
+    
+    <div class="footer">
+      <p>Créé avec ❤️ par <a href="#">H2025</a></p>
+      <p><a href="/">← Retour à l'accueil</a></p>
+    </div>
+  </div>
+
+  <script>
+    let lastQrCount = 0;
+    
+    async function updateQR() {
+      try {
+        const response = await fetch('/api/qr-status');
+        const data = await response.json();
+        
+        const statusBadge = document.getElementById('status-badge');
+        const qrContainer = document.getElementById('qr-container');
+        const instructions = document.getElementById('instructions');
+        const botInfo = document.getElementById('bot-info');
+        
+        // Mise à jour du statut
+        statusBadge.className = 'status ' + data.status.replace('_', '-');
+        
+        if (data.status === 'connected') {
+          statusBadge.textContent = '✅ Connecté';
+          qrContainer.innerHTML = '<div style="text-align:center;color:#4CAF50;font-size:4em;">✓</div>';
+          instructions.style.display = 'none';
+          botInfo.style.display = 'block';
+          if (data.botInfo) {
+            document.getElementById('bot-name').textContent = '🤖 ' + data.botInfo.name;
+            document.getElementById('bot-number').textContent = '📱 ' + data.botInfo.number;
+          }
+        } else if (data.status === 'waiting_qr' && data.qrDataURL) {
+          statusBadge.textContent = '📱 Scanne le QR Code';
+          qrContainer.innerHTML = '<img src="' + data.qrDataURL + '" alt="QR Code" />';
+          instructions.style.display = 'block';
+          botInfo.style.display = 'none';
+          
+          // Notification si nouveau QR
+          if (data.qrCount !== lastQrCount) {
+            lastQrCount = data.qrCount;
+            document.getElementById('timer').textContent = '🔄 Nouveau QR code généré!';
+          }
+        } else if (data.status === 'connecting') {
+          statusBadge.textContent = '🔄 Connexion en cours...';
+          qrContainer.innerHTML = '<div class="loader"></div>';
+        } else {
+          statusBadge.textContent = '⏳ En attente...';
+          qrContainer.innerHTML = '<div class="loader"></div>';
+        }
+        
+      } catch (error) {
+        console.error('Erreur:', error);
+      }
+    }
+    
+    // Première mise à jour
+    updateQR();
+    
+    // Actualisation toutes les 2 secondes
+    setInterval(updateQR, 2000);
+    
+    // Afficher le compteur
+    let countdown = 2;
+    setInterval(() => {
+      countdown--;
+      if (countdown <= 0) countdown = 2;
+      document.getElementById('timer').textContent = 'Actualisation dans ' + countdown + 's...';
+    }, 1000);
+  </script>
+</body>
+</html>
+  `);
+});
+
+// Page d'accueil mise à jour
 app.get("/", (req, res) => {
   const uptime = formatUptime(Date.now() - db.data.stats.startTime);
+  const statusColor = qrState.isConnected ? "#4CAF50" : "#ff9800";
+  const statusText = qrState.isConnected ? "✅ Connecté" : "⏳ En attente de connexion";
+  
   res.send(`
-    <html>
-      <head>
-        <title>HANI-MD</title>
-        <style>
-          body { font-family: Arial; background: linear-gradient(135deg, #1a1a2e, #16213e); color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-          .container { text-align: center; padding: 40px; background: rgba(255,255,255,0.1); border-radius: 20px; }
-          h1 { font-size: 3em; margin: 0; }
-          .status { color: #00ff88; font-size: 1.5em; margin: 20px 0; }
-          .stats { color: #aaa; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <h1>🌟 HANI-MD 🌟</h1>
-          <div class="status">✅ En ligne</div>
-          <div class="stats">
-            ⏱️ Uptime: ${uptime}<br>
-            📨 Commandes: ${db.data.stats.commands}<br>
-            👥 Utilisateurs: ${Object.keys(db.data.users).length}
-          </div>
-        </div>
-      </body>
-    </html>
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HANI-MD - Dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+    .container {
+      background: rgba(255,255,255,0.1);
+      backdrop-filter: blur(10px);
+      border-radius: 24px;
+      padding: 40px;
+      max-width: 500px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    }
+    h1 { color: #fff; font-size: 2.5em; margin-bottom: 10px; }
+    .status {
+      display: inline-block;
+      padding: 10px 20px;
+      border-radius: 50px;
+      font-weight: bold;
+      margin: 15px 0;
+      background: ${statusColor};
+      color: ${qrState.isConnected ? '#fff' : '#000'};
+    }
+    .stats {
+      background: rgba(255,255,255,0.05);
+      border-radius: 12px;
+      padding: 20px;
+      margin: 20px 0;
+    }
+    .stat-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      color: #fff;
+    }
+    .stat-item:last-child { border: none; }
+    .stat-value { color: #4CAF50; font-weight: bold; }
+    .btn {
+      display: inline-block;
+      padding: 15px 30px;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      color: #fff;
+      text-decoration: none;
+      border-radius: 50px;
+      font-weight: bold;
+      margin: 10px;
+      transition: transform 0.3s;
+    }
+    .btn:hover { transform: scale(1.05); }
+    .btn.secondary { background: rgba(255,255,255,0.1); }
+    .footer { color: #666; margin-top: 30px; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🌟 HANI-MD</h1>
+    <p style="color:#aaa;">Bot WhatsApp Intelligent par H2025</p>
+    
+    <div class="status">${statusText}</div>
+    
+    <div class="stats">
+      <div class="stat-item">
+        <span>⏱️ Uptime</span>
+        <span class="stat-value">${uptime}</span>
+      </div>
+      <div class="stat-item">
+        <span>📨 Commandes</span>
+        <span class="stat-value">${db.data.stats.commands}</span>
+      </div>
+      <div class="stat-item">
+        <span>👥 Utilisateurs</span>
+        <span class="stat-value">${Object.keys(db.data.users).length}</span>
+      </div>
+      <div class="stat-item">
+        <span>🏘️ Groupes</span>
+        <span class="stat-value">${Object.keys(db.data.groups).length}</span>
+      </div>
+      <div class="stat-item">
+        <span>🌐 Mode</span>
+        <span class="stat-value">${config.MODE}</span>
+      </div>
+    </div>
+    
+    <a href="/qr" class="btn">📱 Scanner QR Code</a>
+    <a href="/health" class="btn secondary">🔍 Health Check</a>
+    
+    <div class="footer">
+      <p>Version 1.0 | <a href="https://github.com/itestmypartner/HANI" style="color:#9c27b0;">GitHub</a></p>
+    </div>
+  </div>
+</body>
+</html>
   `);
 });
 
 app.listen(port, () => {
   console.log(`🌐 Serveur web sur le port ${port}`);
+  console.log(`📱 Page QR Code: http://localhost:${port}/qr`);
 });
 
 // ═══════════════════════════════════════════════════════════
