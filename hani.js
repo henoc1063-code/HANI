@@ -5401,14 +5401,8 @@ app.post("/api/mysql-test", async (req, res) => {
   }
 });
 
-// API pour obtenir l'état du QR (pour AJAX)
-// 🔒 API QR Status - PROTÉGÉE (nécessite token admin)
+// API pour obtenir l'état du QR (pour AJAX) - Accessible publiquement pour la page QR
 app.get("/api/qr-status", (req, res) => {
-  const token = req.headers['x-admin-token'];
-  if (!isValidSession(token)) {
-    return res.status(401).json({ error: "Non autorisé" });
-  }
-  
   res.json({
     status: qrState.connectionStatus,
     isConnected: qrState.isConnected,
