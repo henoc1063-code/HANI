@@ -3577,11 +3577,12 @@ async function startBot() {
 
       console.log(`\n[!] Déconnexion (code: ${statusCode}, raison: ${reason})`);
 
-      // Session déconnectée manuellement ou expirée
-      if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
-        console.log("[X] Session expirée ou déconnectée. Nouveau QR nécessaire...");
+      // Session déconnectée manuellement, expirée, ou rejetée par WhatsApp (428)
+      if (statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 428) {
+        console.log("[X] Session expirée/rejetée. Suppression et nouveau QR...");
         if (fs.existsSync(SESSION_FOLDER)) {
           fs.rmSync(SESSION_FOLDER, { recursive: true, force: true });
+          console.log("[OK] Session supprimée.");
         }
         reconnectAttempts = 0;
         await delay(3000);
