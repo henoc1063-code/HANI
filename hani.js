@@ -645,6 +645,10 @@ const ownerOnlyCommands = [
   // Surveillance (tes fonctionnalités privées)
   "deleted", "delmsg", "deletedstatus", "delstatus", "statusdel",
   "vv", "viewonce", "getstatus", "spy", "track", "activity", "invisible",
+  // Commandes espion séparées
+  "spyread", "quilit", "spyreply", "quirepond", "spypresence", "quiouvre", "quiecrit",
+  "spyhistory", "spyall", "espionhistorique", "spystatus", "quivoitmesstatus",
+  "spyon", "spyoff", "spyclear",
 ];
 
 // Liste des utilisateurs approuvés
@@ -1066,6 +1070,13 @@ function getMainMenu(prefix, userRole = "user") {
 ┃ ${prefix}mode public/private
 ┃
 ┃ 🕵️ *ESPIONNAGE*
+┃ ${prefix}spyon/spyoff - Mode espion
+┃ ${prefix}spyread - Qui lit mes msg
+┃ ${prefix}spyreply - Qui répond
+┃ ${prefix}spypresence - Qui ouvre chat
+┃ ${prefix}spystatus - Qui voit statuts
+┃ ${prefix}spyhistory - Historique complet
+┃ ${prefix}spyclear - Effacer données
 ┃ ${prefix}spy @user - Surveiller
 ┃ ${prefix}unspy @user - Arrêter
 ┃ ${prefix}spylist - Liste surveillés
@@ -1324,6 +1335,261 @@ async function handleCommand(hani, msg, db) {
       await send("🏓 Pong!");
       const latency = Date.now() - start;
       return send(`📶 Latence: ${latency}ms\n⚡ HANI-MD est opérationnel!`);
+    }
+
+    // ────────── 🕵️ COMMANDES ESPION SÉPARÉES ──────────
+    
+    case "spyread":
+    case "quilit": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      if (!spyData.messageReads || spyData.messageReads.length === 0) {
+        return send(`📖 *Aucune lecture détectée*\n\n_Attends que quelqu'un lise tes messages!_\n\n💡 Active le mode espion: \`.spy on\``);
+      }
+      
+      const uniqueReaders = {};
+      for (const read of spyData.messageReads) {
+        if (!uniqueReaders[read.reader]) {
+          uniqueReaders[read.reader] = { name: read.readerName, count: 0, lastTime: read.timeStr };
+        }
+        uniqueReaders[read.reader].count++;
+      }
+      
+      let list = `📖 ═══════════════════════════\n   *QUI A LU TES MESSAGES*\n═══════════════════════════\n\n`;
+      let i = 1;
+      for (const [num, data] of Object.entries(uniqueReaders)) {
+        const displayName = data.name || "Non enregistré";
+        const cleanNum = num.replace(/[^0-9]/g, '');
+        list += `*${i}.* ${displayName !== "Non enregistré" ? `*${displayName}*` : "_Contact inconnu_"}\n`;
+        list += `   📱 *Numéro:* +${cleanNum}\n`;
+        list += `   📖 ${data.count} msg lu(s) • 🕐 ${data.lastTime}\n`;
+        list += `   💬 wa.me/${cleanNum}\n\n`;
+        i++;
+        if (i > 20) break;
+      }
+      list += `═══════════════════════════\n📊 *Total:* ${spyData.messageReads.length} lectures de ${Object.keys(uniqueReaders).length} personnes`;
+      return send(list);
+    }
+
+    case "spyreply":
+    case "quirepond": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      if (!spyData.replies || spyData.replies.length === 0) {
+        return send(`↩️ *Aucune réponse détectée*\n\n_Attends que quelqu'un réponde à tes messages!_\n\n💡 Active le mode espion: \`.spy on\``);
+      }
+      
+      const uniqueRepliers = {};
+      for (const reply of spyData.replies) {
+        if (!uniqueRepliers[reply.replier]) {
+          uniqueRepliers[reply.replier] = { name: reply.replierName, count: 0, lastTime: reply.timeStr, lastPreview: reply.preview };
+        }
+        uniqueRepliers[reply.replier].count++;
+        uniqueRepliers[reply.replier].lastPreview = reply.preview;
+      }
+      
+      let list = `↩️ ═══════════════════════════\n   *QUI A RÉPONDU À TES MESSAGES*\n═══════════════════════════\n\n`;
+      let i = 1;
+      for (const [num, data] of Object.entries(uniqueRepliers)) {
+        const displayName = data.name || "Non enregistré";
+        const cleanNum = num.replace(/[^0-9]/g, '');
+        list += `*${i}.* ${displayName !== "Non enregistré" ? `*${displayName}*` : "_Contact inconnu_"}\n`;
+        list += `   📱 *Numéro:* +${cleanNum}\n`;
+        list += `   ↩️ ${data.count} réponse(s) • 🕐 ${data.lastTime}\n`;
+        if (data.lastPreview) list += `   💬 _"${data.lastPreview.slice(0, 50)}..."_\n`;
+        list += `   📞 wa.me/${cleanNum}\n\n`;
+        i++;
+        if (i > 20) break;
+      }
+      list += `═══════════════════════════\n📊 *Total:* ${spyData.replies.length} réponses de ${Object.keys(uniqueRepliers).length} personnes`;
+      return send(list);
+    }
+
+    case "spypresence":
+    case "quiouvre":
+    case "quiecrit": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      if (!spyData.presenceDetected || spyData.presenceDetected.length === 0) {
+        return send(`✍️ *Aucune présence détectée*\n\n_Attends que quelqu'un ouvre ta discussion!_\n\n💡 Ce système détecte:\n• ✍️ Quand quelqu'un écrit\n• 🎤 Quand quelqu'un enregistre un vocal\n• 👁️ Quand quelqu'un est actif dans ton chat`);
+      }
+      
+      const uniquePresences = {};
+      for (const presence of spyData.presenceDetected) {
+        if (!uniquePresences[presence.number]) {
+          uniquePresences[presence.number] = { 
+            name: presence.name, 
+            count: 0, 
+            actions: new Set(),
+            lastTime: new Date(presence.timestamp).toLocaleString("fr-FR")
+          };
+        }
+        uniquePresences[presence.number].count++;
+        uniquePresences[presence.number].actions.add(presence.action);
+      }
+      
+      let list = `✍️ ═══════════════════════════\n   *QUI A OUVERT TON CHAT*\n═══════════════════════════\n\n`;
+      let i = 1;
+      for (const [num, data] of Object.entries(uniquePresences)) {
+        const displayName = data.name || "Non enregistré";
+        const cleanNum = num.replace(/[^0-9]/g, '');
+        const actionsStr = Array.from(data.actions).map(a => {
+          switch(a) {
+            case "composing": return "✍️";
+            case "recording": return "🎤";
+            case "available": return "👁️";
+            default: return "📱";
+          }
+        }).join(" ");
+        list += `*${i}.* ${displayName !== "Non enregistré" ? `*${displayName}*` : "_Contact inconnu_"}\n`;
+        list += `   📱 *Numéro:* +${cleanNum}\n`;
+        list += `   ${actionsStr} ${data.count} détection(s) • 🕐 ${data.lastTime}\n`;
+        list += `   💬 wa.me/${cleanNum}\n\n`;
+        i++;
+        if (i > 20) break;
+      }
+      list += `═══════════════════════════\n📊 *Total:* ${spyData.presenceDetected.length} détections de ${Object.keys(uniquePresences).length} personnes\n\n*Légende:* ✍️=Écrit 🎤=Vocal 👁️=Actif`;
+      return send(list);
+    }
+
+    case "spyhistory":
+    case "spyall":
+    case "espionhistorique": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      const statusCount = spyData.statusViews?.length || 0;
+      const readCount = spyData.messageReads?.length || 0;
+      const repliesCount = spyData.replies?.length || 0;
+      const presenceCount = spyData.presenceDetected?.length || 0;
+      
+      const uniqueStatusViewers = new Set((spyData.statusViews || []).map(v => v.viewer)).size;
+      const uniqueReaders = new Set((spyData.messageReads || []).map(r => r.reader)).size;
+      const uniqueRepliers = new Set((spyData.replies || []).map(r => r.replier)).size;
+      const uniquePresence = new Set((spyData.presenceDetected || []).map(p => p.number)).size;
+      
+      let history = `🕵️ ═══════════════════════════\n   *HISTORIQUE ESPION COMPLET*\n═══════════════════════════\n\n`;
+      
+      history += `📊 *RÉSUMÉ GLOBAL:*\n`;
+      history += `━━━━━━━━━━━━━━━━━━━━━\n`;
+      history += `👁️ *Vues statuts:* ${statusCount} (${uniqueStatusViewers} personnes)\n`;
+      history += `📖 *Messages lus:* ${readCount} (${uniqueReaders} personnes)\n`;
+      history += `↩️ *Réponses:* ${repliesCount} (${uniqueRepliers} personnes)\n`;
+      history += `✍️ *Présences:* ${presenceCount} (${uniquePresence} personnes)\n\n`;
+      
+      // Top 5 de chaque catégorie
+      if (spyData.statusViews && spyData.statusViews.length > 0) {
+        history += `👁️ *DERNIÈRES VUES STATUTS:*\n`;
+        const last5Status = spyData.statusViews.slice(0, 5);
+        for (const v of last5Status) {
+          history += `   • ${v.viewerName || "Inconnu"} (${v.viewer.replace(/[^0-9]/g, '').slice(-10)})\n`;
+        }
+        history += `\n`;
+      }
+      
+      if (spyData.messageReads && spyData.messageReads.length > 0) {
+        history += `📖 *DERNIÈRES LECTURES:*\n`;
+        const last5Reads = spyData.messageReads.slice(0, 5);
+        for (const r of last5Reads) {
+          history += `   • ${r.readerName || "Inconnu"} - ${r.timeStr}\n`;
+        }
+        history += `\n`;
+      }
+      
+      if (spyData.replies && spyData.replies.length > 0) {
+        history += `↩️ *DERNIÈRES RÉPONSES:*\n`;
+        const last5Replies = spyData.replies.slice(0, 5);
+        for (const r of last5Replies) {
+          const preview = r.preview ? r.preview.slice(0, 30) + "..." : "";
+          history += `   • ${r.replierName || "Inconnu"}: "${preview}"\n`;
+        }
+        history += `\n`;
+      }
+      
+      if (spyData.presenceDetected && spyData.presenceDetected.length > 0) {
+        history += `✍️ *DERNIÈRES PRÉSENCES:*\n`;
+        const last5Presence = spyData.presenceDetected.slice(-5).reverse();
+        for (const p of last5Presence) {
+          const emoji = p.action === "composing" ? "✍️" : p.action === "recording" ? "🎤" : "👁️";
+          history += `   • ${emoji} ${p.name || "Inconnu"}\n`;
+        }
+        history += `\n`;
+      }
+      
+      history += `═══════════════════════════\n`;
+      history += `⚙️ *ÉTAT:*\n`;
+      history += `• Spy statuts: ${protectionState.spyStatusViews ? "✅" : "❌"}\n`;
+      history += `• Spy lectures: ${protectionState.spyReadReceipts ? "✅" : "❌"}\n`;
+      history += `• Spy réponses: ${protectionState.spyReplies ? "✅" : "❌"}\n`;
+      history += `• Spy présence: ${protectionState.spyPresence ? "✅" : "❌"}\n\n`;
+      history += `📋 *COMMANDES:*\n`;
+      history += `• \`.spyread\` → Qui lit mes messages\n`;
+      history += `• \`.spyreply\` → Qui répond\n`;
+      history += `• \`.spypresence\` → Qui ouvre mon chat\n`;
+      history += `• \`.spy status\` → Qui voit mes statuts\n`;
+      history += `• \`.spy clear\` → Effacer tout`;
+      
+      return send(history);
+    }
+
+    case "spystatus":
+    case "quivoitmesstatus": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      if (!spyData.statusViews || spyData.statusViews.length === 0) {
+        return send(`👁️ *Aucune vue de statut détectée*\n\n_Poste un statut et attends que quelqu'un le voie!_\n\n💡 Active le mode espion: \`.spy on\``);
+      }
+      
+      const uniqueViewers = {};
+      for (const view of spyData.statusViews) {
+        if (!uniqueViewers[view.viewer]) {
+          uniqueViewers[view.viewer] = { name: view.viewerName, count: 0, lastTime: view.timeStr };
+        }
+        uniqueViewers[view.viewer].count++;
+      }
+      
+      let list = `👁️ ═══════════════════════════\n   *QUI VOIT TES STATUTS*\n═══════════════════════════\n\n`;
+      let i = 1;
+      for (const [num, data] of Object.entries(uniqueViewers)) {
+        const displayName = data.name || "Non enregistré";
+        const cleanNum = num.replace(/[^0-9]/g, '');
+        list += `*${i}.* ${displayName !== "Non enregistré" ? `*${displayName}*` : "_Contact inconnu_"}\n`;
+        list += `   📱 *Numéro:* +${cleanNum}\n`;
+        list += `   👁️ ${data.count} vue(s) • 🕐 ${data.lastTime}\n`;
+        list += `   💬 wa.me/${cleanNum}\n\n`;
+        i++;
+        if (i > 20) break;
+      }
+      list += `═══════════════════════════\n📊 *Total:* ${spyData.statusViews.length} vues de ${Object.keys(uniqueViewers).length} personnes`;
+      return send(list);
+    }
+
+    case "spyon": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      protectionState.spyStatusViews = true;
+      protectionState.spyReadReceipts = true;
+      protectionState.spyReplies = true;
+      protectionState.spyPresence = true;
+      return send(`🕵️ *MODE ESPION ACTIVÉ* ✅\n\nTu recevras des notifications quand:\n• 👁️ Quelqu'un voit tes statuts\n• 📖 Quelqu'un lit tes messages\n• ↩️ Quelqu'un répond\n• ✍️ Quelqu'un écrit dans ton chat\n\n💡 \`.spyoff\` pour désactiver`);
+    }
+
+    case "spyoff": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      protectionState.spyStatusViews = false;
+      protectionState.spyReadReceipts = false;
+      protectionState.spyReplies = false;
+      protectionState.spyPresence = false;
+      return send(`🕵️ *MODE ESPION DÉSACTIVÉ* ❌\n\nPlus de notifications espion.\n\n💡 \`.spyon\` pour réactiver`);
+    }
+
+    case "spyclear": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      spyData.statusViews = [];
+      spyData.messageReads = [];
+      spyData.replies = [];
+      spyData.pendingMessages = {};
+      spyData.presenceDetected = [];
+      spyData.presenceCooldown = {};
+      return send(`🗑️ *Historique espion effacé*\n\n✅ Toutes les données supprimées:\n• Vues de statuts\n• Lectures de messages\n• Réponses\n• Présences détectées`);
     }
 
     case "whoami": {
