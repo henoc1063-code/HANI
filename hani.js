@@ -2186,17 +2186,37 @@ async function handleCommand(hani, msg, db) {
       const parts = args?.split(" ") || [];
       
       if (parts.length < 3) {
-        return send(`📅 *PROGRAMMER UN MESSAGE*\n\n📋 *Usage:*\n\`.schedule [numéro] [heure] [message]\`\n\n📝 *Exemples:*\n• \`.schedule 22550252467 14:30 Salut, ça va?\`\n• \`.schedule 22550252467 08:00 Bonjour!\`\n• \`.schedule 33612345678 20:00 Bonne soirée\`\n\n⏰ *Format heure:* HH:MM (24h)\n\n💡 *Autres commandes:*\n• \`.schedulelist\` → Voir les messages programmés\n• \`.scheduledel [id]\` → Supprimer un message\n• \`.schedulerepeat\` → Message récurrent`);
+        return send(`📅 *PROGRAMMER UN MESSAGE*\n\n📋 *Usage:*\n\`.schedule [numéro] [heure] [message]\`\n\n📝 *Exemples:*\n• \`.schedule 22550252467 14:30 Salut ça va?\`\n• \`.schedule 22550252467 8:00 Bonjour!\`\n• \`.schedule 33612345678 20h00 Bonne soirée\`\n\n⏰ *Formats d'heure acceptés:*\n• 14:30 ou 14h30 ou 1430\n• 8:00 ou 8h ou 08:00\n\n💡 *Autres commandes:*\n• \`.schedulelist\` → Voir les messages programmés\n• \`.scheduledel [id]\` → Supprimer un message\n• \`.schedulerepeat\` → Message récurrent`);
       }
       
       let targetNumber = parts[0].replace(/[^0-9]/g, '');
-      const timeStr = parts[1];
+      let timeStr = parts[1];
       const message = parts.slice(2).join(" ");
       
-      // Vérifier le format de l'heure
+      // Normaliser le format de l'heure (accepter plusieurs formats)
+      // Remplacer 'h' par ':' et supprimer les espaces
+      timeStr = timeStr.toLowerCase().replace(/h/g, ':').replace(/\s/g, '');
+      
+      // Si format HHMM sans séparateur (ex: 1430)
+      if (/^\d{3,4}$/.test(timeStr)) {
+        const padded = timeStr.padStart(4, '0');
+        timeStr = padded.slice(0, 2) + ':' + padded.slice(2);
+      }
+      
+      // Si format H:MM (ex: 8:30), ajouter le 0 devant
+      if (/^\d:\d{2}$/.test(timeStr)) {
+        timeStr = '0' + timeStr;
+      }
+      
+      // Si juste un nombre (ex: 14 pour 14:00)
+      if (/^\d{1,2}$/.test(timeStr)) {
+        timeStr = timeStr.padStart(2, '0') + ':00';
+      }
+      
+      // Vérifier le format final de l'heure
       const timeMatch = timeStr.match(/^(\d{1,2}):(\d{2})$/);
       if (!timeMatch) {
-        return send(`❌ Format d'heure invalide.\n\n⏰ Utilise le format HH:MM (ex: 14:30, 08:00)`);
+        return send(`❌ *Format d'heure non reconnu:* "${parts[1]}"\n\n⏰ *Formats acceptés:*\n• 14:30 ou 14h30\n• 8:00 ou 8h00 ou 08:00\n• 1430 (sans séparateur)\n• 14 (pour 14:00)\n\n📝 *Exemple:*\n\`.schedule 22550252467 14:30 Salut!\``);
       }
       
       const hours = parseInt(timeMatch[1]);
@@ -2260,11 +2280,11 @@ async function handleCommand(hani, msg, db) {
       const parts = args?.split(" ") || [];
       
       if (parts.length < 4) {
-        return send(`📅 *MESSAGE RÉCURRENT*\n\n📋 *Usage:*\n\`.schedulerepeat [numéro] [heure] [fréquence] [message]\`\n\n📝 *Fréquences:*\n• \`daily\` → Tous les jours\n• \`weekly\` → Chaque semaine\n• \`monthly\` → Chaque mois\n\n📝 *Exemple:*\n\`.schedulerepeat 22550252467 08:00 daily Bonjour! Bonne journée\`\n\n_Envoie "Bonjour! Bonne journée" tous les jours à 8h_`);
+        return send(`📅 *MESSAGE RÉCURRENT*\n\n📋 *Usage:*\n\`.schedulerepeat [numéro] [heure] [fréquence] [message]\`\n\n📝 *Fréquences:*\n• \`daily\` → Tous les jours\n• \`weekly\` → Chaque semaine\n• \`monthly\` → Chaque mois\n\n📝 *Exemple:*\n\`.schedulerepeat 22550252467 8:00 daily Bonjour!\`\n\n⏰ *Formats d'heure:* 8:00, 08h00, 0800`);
       }
       
       let targetNumber = parts[0].replace(/[^0-9]/g, '');
-      const timeStr = parts[1];
+      let timeStr = parts[1];
       const repeat = parts[2].toLowerCase();
       const message = parts.slice(3).join(" ");
       
@@ -2273,10 +2293,23 @@ async function handleCommand(hani, msg, db) {
         return send(`❌ Fréquence invalide.\n\nUtilise: daily, weekly, ou monthly`);
       }
       
+      // Normaliser le format de l'heure
+      timeStr = timeStr.toLowerCase().replace(/h/g, ':').replace(/\s/g, '');
+      if (/^\d{3,4}$/.test(timeStr)) {
+        const padded = timeStr.padStart(4, '0');
+        timeStr = padded.slice(0, 2) + ':' + padded.slice(2);
+      }
+      if (/^\d:\d{2}$/.test(timeStr)) {
+        timeStr = '0' + timeStr;
+      }
+      if (/^\d{1,2}$/.test(timeStr)) {
+        timeStr = timeStr.padStart(2, '0') + ':00';
+      }
+      
       // Vérifier le format de l'heure
       const timeMatch = timeStr.match(/^(\d{1,2}):(\d{2})$/);
       if (!timeMatch) {
-        return send(`❌ Format d'heure invalide.\n\n⏰ Utilise le format HH:MM (ex: 14:30)`);
+        return send(`❌ Format d'heure non reconnu: "${parts[1]}"\n\n⏰ Formats: 14:30, 14h30, 1430, 8:00`);
       }
       
       const hours = parseInt(timeMatch[1]);
