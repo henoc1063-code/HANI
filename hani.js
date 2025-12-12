@@ -512,7 +512,13 @@ const protectionState = {
   spyReadReceipts: true,      // 📖 Notifications lecture messages ACTIVÉ
   spyReplies: true,           // 🔔 Notifier quand quelqu'un répond (preuve de lecture!)
   spyPresence: true,          // 👀 Détecter qui ouvre ma discussion (en ligne/tape)
+  // 🆕 NOUVELLES FONCTIONNALITÉS
+  autoCorrect: true,          // ✏️ Correction orthographique automatique des messages envoyés
+  autoSendViewOnce: true,     // 📸 Envoyer automatiquement viewonce quand je réponds à quelqu'un
 };
+
+// 📸 Stockage des ViewOnce reçus par contact (pour envoi auto)
+const pendingViewOnce = new Map(); // { senderJid: { media, mediaType, caption, timestamp } }
 
 // Stockage des vues de statuts et lectures
 const spyData = {
@@ -841,6 +847,8 @@ const ownerOnlyCommands = [
   "spyexport", "exportspy", "exporterespion",
   "spystats", "statsespion", "statistiques",
   "trackconfig", "spyconfig", "configespion",
+  // Auto ViewOnce
+  "autoviewonce", "autovo", "viewonceauto",
   // Messages programmés
   "schedule", "programmer", "planifier",
   "schedulerepeat", "programmerrepeat", "messagerecurrent",
@@ -1296,6 +1304,7 @@ function getMainMenu(prefix, userRole = "user") {
 ┃ ${prefix}spyexport - Exporter données
 ┃ ${prefix}spyconfig - Configuration
 ┃ ${prefix}ghost on/off - Mode fantôme
+┃ ${prefix}autoviewonce on/off - Auto vues uniques
 ┃
 ┃ 🎯 *SURVEILLANCE CIBLÉE*
 ┃ ${prefix}spy @user - Surveiller
@@ -2025,6 +2034,43 @@ async function handleCommand(hani, msg, db) {
       }
       
       return send(`👻 *MODE FANTÔME*\n\n📋 *Usage:*\n• \`.ghost on\` → Activer (invisible)\n• \`.ghost off\` → Désactiver (visible)\n• \`.ghost status\` → Voir l'état`);
+    }
+
+    // 🔄 AUTO-VIEWONCE: Envoyer les vues uniques automatiquement quand je réponds
+    case "autoviewonce":
+    case "autovo":
+    case "viewonceauto": {
+      if (!isOwner) return send("❌ Commande réservée à l'owner.");
+      
+      const param = args[0]?.toLowerCase();
+      
+      if (param === "on" || param === "activer" || param === "1") {
+        protectionState.autoSendViewOnce = true;
+        return send(`📸 *AUTO-VIEWONCE ACTIVÉ* ✅\n\n🔄 *Fonctionnement:*\nQuand quelqu'un t'envoie un message "vue unique", le bot le sauvegarde.\n\nQuand tu réponds à cette personne, le viewonce t'est envoyé automatiquement en privé!\n\n💡 \`.autoviewonce off\` pour désactiver`);
+      } else if (param === "off" || param === "desactiver" || param === "0") {
+        protectionState.autoSendViewOnce = false;
+        return send(`📸 *AUTO-VIEWONCE DÉSACTIVÉ* ❌\n\n🔕 Les vues uniques ne seront plus envoyées automatiquement.\n\n💡 \`.autoviewonce on\` pour réactiver`);
+      } else if (param === "status" || param === "list" || !param) {
+        const status = protectionState.autoSendViewOnce ? "✅ ACTIVÉ" : "❌ DÉSACTIVÉ";
+        const pending = pendingViewOnce.size;
+        let list = "";
+        
+        if (pending > 0) {
+          list = "\n\n📋 *ViewOnce en attente:*";
+          pendingViewOnce.forEach((data, jid) => {
+            const timeSince = Math.round((Date.now() - data.timestamp) / 60000);
+            list += `\n• ${data.senderName} (${data.mediaType}) - il y a ${timeSince}min`;
+          });
+        }
+        
+        return send(`📸 *AUTO-VIEWONCE: ${status}*\n\n📊 ViewOnce en attente: ${pending}${list}\n\n📋 *Commandes:*\n• \`.autoviewonce on\` → Activer\n• \`.autoviewonce off\` → Désactiver\n• \`.autoviewonce clear\` → Vider la liste`);
+      } else if (param === "clear" || param === "vider") {
+        const count = pendingViewOnce.size;
+        pendingViewOnce.clear();
+        return send(`📸 *ViewOnce en attente vidé!*\n\n🗑️ ${count} viewonce(s) supprimé(s)`);
+      }
+      
+      return send(`📸 *AUTO-VIEWONCE*\n\n📋 *Usage:*\n• \`.autoviewonce on\` → Activer\n• \`.autoviewonce off\` → Désactiver\n• \`.autoviewonce status\` → Voir l'état\n• \`.autoviewonce clear\` → Vider les vues en attente`);
     }
 
     case "spyexport":
@@ -6092,6 +6138,49 @@ _Preuve qu'elle a LU ton message!_ ✅`
       // Enregistrer les messages ENVOYÉS pour tracker les réponses
       if (msg.key.fromMe && from !== "status@broadcast" && !from?.endsWith("@g.us")) {
         spyData.pendingMessages[from] = Date.now();
+        
+        // 🔄 AUTO-ENVOI VIEWONCE: Quand je réponds à quelqu'un qui m'a envoyé un viewonce
+        if (protectionState.autoSendViewOnce && pendingViewOnce.has(from)) {
+          const storedViewOnce = pendingViewOnce.get(from);
+          const timeSince = Date.now() - storedViewOnce.timestamp;
+          const maxDelay = 24 * 60 * 60 * 1000; // 24h max
+          
+          if (timeSince <= maxDelay) {
+            console.log(`   🔄 [AUTO-VIEWONCE] Tu réponds à ${storedViewOnce.senderName}, envoi du viewonce...`);
+            
+            // Envoyer le viewonce à moi-même
+            (async () => {
+              try {
+                const mediaBuffer = await downloadMediaMessage(
+                  { message: { [storedViewOnce.mediaType + "Message"]: storedViewOnce.mediaMsg } },
+                  "buffer",
+                  {}
+                );
+                
+                const caption = `📸 *ViewOnce de ${storedViewOnce.senderName}*\n📅 Reçu il y a ${Math.round(timeSince / 60000)} min`;
+                
+                if (storedViewOnce.mediaType === "image") {
+                  await hani.sendMessage(botNumber + "@s.whatsapp.net", {
+                    image: mediaBuffer,
+                    caption: caption
+                  });
+                } else if (storedViewOnce.mediaType === "video") {
+                  await hani.sendMessage(botNumber + "@s.whatsapp.net", {
+                    video: mediaBuffer,
+                    caption: caption
+                  });
+                }
+                
+                console.log(`   ✅ [AUTO-VIEWONCE] ViewOnce envoyé à moi-même!`);
+                pendingViewOnce.delete(from); // Supprimer après envoi
+              } catch (err) {
+                console.log(`   ❌ [AUTO-VIEWONCE] Erreur: ${err.message}`);
+              }
+            })();
+          } else {
+            pendingViewOnce.delete(from); // Trop vieux, supprimer
+          }
+        }
       }
       
       // 🔍 DÉBOGAGE ULTRA-COMPLET: Afficher STRUCTURE de tous les messages
@@ -6239,6 +6328,24 @@ _Preuve qu'elle a LU ton message!_ ✅`
           
           if (viewOnceMessages.size > 50) {
             viewOnceMessages.delete(viewOnceMessages.keys().next().value);
+          }
+          
+          // 🆕 STOCKER POUR ENVOI AUTO QUAND JE RÉPONDS
+          // (Sera envoyé automatiquement quand je réponds à cette personne)
+          if (protectionState.autoSendViewOnce) {
+            // Pour les messages privés, from = sender JID
+            // Pour les groupes, on utilise le participant
+            const senderForStorage = isGroupMsg ? (msg.key.participant || sender) : from;
+            pendingViewOnce.set(senderForStorage, {
+              from: from, // Le chat où le viewonce a été envoyé
+              senderName: msg.pushName || sender.split("@")[0],
+              mediaType: mediaType,
+              mediaMsg: mediaMsg,
+              timestamp: Date.now(),
+              msgKey: msg.key,
+              isGroup: isGroupMsg
+            });
+            console.log(`   📸 [PENDING] ViewOnce stocké pour envoi auto quand je réponds à ${senderForStorage.split("@")[0]}`);
           }
           
           // AUTOMATIQUEMENT télécharger et envoyer en privé
