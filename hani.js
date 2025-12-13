@@ -5729,6 +5729,7 @@ async function startBot() {
       // 🔔 Envoyer notification de connexion dans "Moi-même"
       try {
         const botJid = hani.user?.id?.split(":")[0] + "@s.whatsapp.net";
+        console.log(`[DEBUG] Envoi notification connexion à: ${botJid}`);
         await hani.sendMessage(botJid, {
           text: `✅ *HANI-MD CONNECTÉ !*
           
@@ -5737,13 +5738,20 @@ async function startBot() {
 ⚙️ Préfixe: ${config.PREFIXE}
 🕐 Connecté le: ${new Date().toLocaleString("fr-FR")}
 
-🛡️ *Protections actives:*
-• Anti-delete messages ✅
-• Vue unique auto ✅
-• Anti-suppression statuts ✅
-• Notifications lecture ✅
-• Détection présence ✅
+🛡️ *TOUTES LES NOTIFICATIONS ACTIVÉES:*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+📖 T'a écrit → ✅ ACTIF
+📖 Message lu par → ✅ ACTIF  
+👁️ Statut vu par → ✅ ACTIF
+🕵️ Présence détectée → ✅ ACTIF
+🗑️ Message supprimé → ✅ ACTIF
+📵 Appel rejeté → ✅ ACTIF
+📸 Vue unique interceptée → ✅ ACTIF
+🎤 Vocal écoute unique → ✅ ACTIF
+📺 Statut supprimé → ✅ ACTIF
+━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+💡 Toutes les notifications arrivent ici automatiquement!
 📝 Tape *${config.PREFIXE}menu* pour les commandes`
         });
         console.log("[OK] Notification de connexion envoyée dans Moi-même");
