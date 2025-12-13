@@ -8,7 +8,7 @@
  * Lancer avec: node hani.js
  * Scanne le QR code avec WhatsApp → Appareils connectés
  * 
- * 🔄 BUILD: 2025-12-13T18:55:00Z - v2.9.0 - ENREGISTREMENT AUTO CONTACTS AMELIORE
+ * 🔄 BUILD: 2025-12-13T19:00:00Z - v3.0.0 - LIMITE 13 CHIFFRES MAX
  */
 
 const fs = require("fs");
@@ -724,9 +724,9 @@ const isLID = (number) => {
   if (str.includes("@lid")) return true;
   // Extraire uniquement les chiffres
   const clean = str.replace(/[^0-9]/g, '');
-  // Les LID sont généralement très longs (> 20 chiffres)
-  // Les vrais numéros ont généralement 8-15 chiffres
-  if (clean.length > 20) return true;
+  // Les LID sont généralement très longs (> 13 chiffres)
+  // Les vrais numéros ont généralement 8-13 chiffres
+  if (clean.length > 13) return true;
   return false;
 };
 
@@ -961,7 +961,7 @@ function getContactName(numberOrJid) {
 }
 
 // 🆕 OBTENIR INFOS COMPLÈTES D'UN CONTACT (Nom + Numéro)
-// Retourne "Nom (numéro formaté)" ou juste le numéro si pas de nom
+// Si numéro > 13 chiffres, affiche juste le nom WhatsApp
 function getContactInfo(numberOrJid) {
   if (!numberOrJid) return "Inconnu";
   
@@ -971,16 +971,24 @@ function getContactInfo(numberOrJid) {
   const contact = contactsDB.get(number);
   const formattedNum = formatPhoneNumber(number);
   
+  // Si numéro dépasse 13 chiffres, afficher juste le nom
+  const isTooLong = number.length > 13;
+  
   if (contact && contact.name && contact.name !== "Inconnu" && contact.name.length > 1) {
+    // Numéro trop long = juste le nom
+    if (isTooLong) return contact.name;
     return `${contact.name} (${formattedNum})`;
   }
   
   // Essayer le cache secondaire
   const cachedName = contactNameCache.get(number) || contactNameCache.get(numberOrJid);
   if (cachedName && cachedName !== "Inconnu" && cachedName.length > 1) {
+    if (isTooLong) return cachedName;
     return `${cachedName} (${formattedNum})`;
   }
   
+  // Pas de nom trouvé
+  if (isTooLong) return "Contact WhatsApp";
   return formattedNum;
 }
 
