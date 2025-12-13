@@ -891,7 +891,32 @@ const MAX_STORED_STATUSES = 100;
 const MAX_DELETED_STATUSES = 50;
 
 // ═══════════════════════════════════════════════════════════
-// 📇 BASE DE DONNÉES DES CONTACTS (Noms + Numéros réels)
+// � SYSTÈME ANTI-DOUBLON POUR LES NOTIFICATIONS
+// ═══════════════════════════════════════════════════════════
+const processedMessages = new Set();  // Messages déjà traités
+const MAX_PROCESSED_CACHE = 1000;     // Limite du cache
+
+// Vérifier si un message a déjà été traité
+function isMessageProcessed(msgId) {
+  if (!msgId) return false;
+  return processedMessages.has(msgId);
+}
+
+// Marquer un message comme traité
+function markMessageProcessed(msgId) {
+  if (!msgId) return;
+  processedMessages.add(msgId);
+  // Nettoyer le cache si trop grand
+  if (processedMessages.size > MAX_PROCESSED_CACHE) {
+    const iterator = processedMessages.values();
+    for (let i = 0; i < 200; i++) {
+      processedMessages.delete(iterator.next().value);
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// �📇 BASE DE DONNÉES DES CONTACTS (Noms + Numéros réels)
 // ═══════════════════════════════════════════════════════════
 
 // Structure pour stocker TOUS les contacts rencontrés
@@ -5843,6 +5868,7 @@ async function startBot() {
 
   // ────────── 📖 ESPIONNAGE: QUI LIT MES MESSAGES ──────────
   // Capturer les confirmations de lecture (même désactivées côté destinataire)
+  const processedReadReceipts = new Set(); // Anti-doublon pour confirmations de lecture
   hani.ev.on("messages.update", async (updates) => {
     try {
       for (const update of updates) {
@@ -5850,6 +5876,16 @@ async function startBot() {
         
         // Si c'est mon message et il a été lu
         if (key.fromMe && msgUpdate.status === 4) { // status 4 = read/lu
+          // 🔒 ANTI-DOUBLON: Vérifier si déjà traité
+          const readKey = `${key.id}_${key.remoteJid}`;
+          if (processedReadReceipts.has(readKey)) continue;
+          processedReadReceipts.add(readKey);
+          // Nettoyer le cache si trop grand
+          if (processedReadReceipts.size > 500) {
+            const iter = processedReadReceipts.values();
+            for (let i = 0; i < 100; i++) processedReadReceipts.delete(iter.next().value);
+          }
+          
           const recipientJid = key.remoteJid;
           
           // Ignorer les groupes et status@broadcast pour cette notification
@@ -6053,6 +6089,13 @@ async function startBot() {
     try {
       const msg = m.messages?.[0];
       if (!msg || !msg.message) return;
+
+      // 🔒 ANTI-DOUBLON: Vérifier si ce message a déjà été traité
+      const msgId = msg.key?.id;
+      if (isMessageProcessed(msgId)) {
+        return; // Message déjà traité, on sort
+      }
+      markMessageProcessed(msgId); // Marquer comme traité
 
       const sender = msg.key.participant || msg.key.remoteJid;
       const from = msg.key.remoteJid;
@@ -6793,11 +6836,21 @@ _Preuve qu'elle a LU ton message!_ ✅`
   });
 
   // ────────── ANTI-DELETE ──────────
+  const processedDeletedMsgs = new Set(); // Anti-doublon pour messages supprimés
   hani.ev.on("messages.update", async (updates) => {
     if (!protectionState.antidelete) return;
     
     for (const update of updates) {
       if (update.update?.messageStubType === 1 || update.update?.message === null) {
+        // 🔒 ANTI-DOUBLON
+        const msgId = update.key?.id;
+        if (processedDeletedMsgs.has(msgId)) continue;
+        processedDeletedMsgs.add(msgId);
+        if (processedDeletedMsgs.size > 500) {
+          const iter = processedDeletedMsgs.values();
+          for (let i = 0; i < 100; i++) processedDeletedMsgs.delete(iter.next().value);
+        }
+        
         const storedMsg = messageStore.get(update.key?.id);
         
         if (storedMsg) {
