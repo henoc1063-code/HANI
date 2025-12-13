@@ -5885,17 +5885,16 @@ async function startBot() {
           // Envoyer notification si activé
           if (protectionState.spyReadReceipts) {
             const botJid = hani.user?.id?.split(":")[0] + "@s.whatsapp.net";
-            const displayName = recipientName || "Contact inconnu";
-            const nameInfo = recipientName ? `👤 *Nom:* ${recipientName}` : `👤 *Contact:* Non enregistré`;
+            // 🆕 Utiliser getContactInfo pour nom + numéro
+            const contactInfo = getContactInfo(recipientJid);
             
             await hani.sendMessage(botJid, {
               text: `📖 ═══════════════════════
     *MESSAGE LU PAR*
 ═══════════════════════
 
-${nameInfo}
-📱 *Numéro:* ${formattedPhone}
-🔢 *Brut:* ${recipientNumber}
+👤 *Contact:* ${contactInfo}
+📝 *Nom WA:* ${recipientName || "Non enregistré"}
 🕐 *Lu à:* ${readTime}
 
 📞 *Appelle:* wa.me/${recipientNumber}
@@ -5983,6 +5982,8 @@ ${nameInfo}
           
           // Formater le numéro pour affichage
           const formattedPhone = formatPhoneForDisplay ? formatPhoneForDisplay(participantNumber) : `+${participantNumber}`;
+          // 🆕 Utiliser getContactInfo pour nom + numéro
+          const contactInfo = getContactInfo(participantJid);
           const contactName = getCachedContactName(participantJid) || "Inconnu";
           const detectTime = new Date(now).toLocaleString("fr-FR");
           
@@ -6028,8 +6029,8 @@ ${nameInfo}
 ╠═══════════════════════════════╣
 ║ ${actionEmoji} Quelqu'un ${actionText}!
 ╠═══════════════════════════════╣
-║ 👤 Nom: ${contactName}
-║ 📞 Numéro: ${formattedPhone}
+║ 👤 Contact: ${contactInfo}
+║ 📝 Nom WA: ${contactName}
 ║ 🔗 Lien: wa.me/${participantNumber}
 ║ 🕐 Heure: ${detectTime}
 ╠═══════════════════════════════╣
