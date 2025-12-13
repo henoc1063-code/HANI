@@ -6179,69 +6179,65 @@ async function startBot() {
         const senderNumber = sender?.split("@")[0];
         
         // ⚠️ IGNORER LES LID (Linked ID) - ce ne sont pas de vrais numéros
-        if (isLID(senderNumber)) {
-          // Ne pas loguer pour éviter le spam, juste ignorer silencieusement
-        } else {
-        
-        const formattedPhone = formatPhoneForDisplay ? formatPhoneForDisplay(senderNumber) : `+${senderNumber}`;
-        const timestamp = Date.now();
-        const readTime = new Date(timestamp).toLocaleString("fr-FR");
-        
-        // Extraire un aperçu du message
-        const msgPreview = msg.message?.conversation || 
-                          msg.message?.extendedTextMessage?.text ||
-                          msg.message?.imageMessage?.caption ||
-                          msg.message?.videoMessage?.caption ||
-                          (msg.message?.audioMessage ? "🎵 Vocal" : "") ||
-                          (msg.message?.imageMessage ? "📷 Photo" : "") ||
-                          (msg.message?.videoMessage ? "🎬 Vidéo" : "") ||
-                          (msg.message?.stickerMessage ? "🎴 Sticker" : "") ||
-                          "📩 Message";
-        
-        // Vérifier si c'est une réponse à mon message
-        const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-        const isReply = !!quotedMsg;
-        
-        // Vérifier si on a envoyé un message à cette personne récemment (dans les 24h)
-        const pendingTime = spyData.pendingMessages[from];
-        const isFollowUp = pendingTime && (timestamp - pendingTime < 24 * 60 * 60 * 1000);
-        
-        // 🆕 ENVOYER NOTIFICATION POUR TOUS LES MESSAGES (pas seulement réponses)
-        // Stocker l'info
-        spyData.replies.unshift({
-          replier: senderNumber,
-          replierName: senderName,
-          replierJid: from,
-          timestamp: timestamp,
-          timeStr: readTime,
-          preview: msgPreview.slice(0, 50),
-          isDirectReply: isReply
-        });
-        
-        // Limiter les entrées
-        if (spyData.replies.length > spyData.maxEntries) {
-          spyData.replies = spyData.replies.slice(0, spyData.maxEntries);
-        }
-        
-        // Déterminer le type d'action
-        let actionType = "T'A ÉCRIT";
-        let actionDesc = "💬 _Nouveau message reçu_";
-        if (isReply) {
-          actionType = "RÉPONDU À TON MESSAGE";
-          actionDesc = "↩️ _Cette personne a RÉPONDU à ton message!_";
-        } else if (isFollowUp) {
-          actionType = "T'A RÉPONDU";
-          actionDesc = "💡 _Cette personne t'a écrit après ton message!_";
-        }
-        
-        // 🆕 Utiliser getContactInfo pour avoir le nom enregistré
-        const contactInfo = getContactInfo(sender);
-        
-        console.log(`📨 [NOTIF] Envoi notification "${actionType}" de ${contactInfo} vers ${botNumber}`);
-        
-        try {
-          await hani.sendMessage(botNumber, {
-            text: `📖 ═══════════════════════════
+        if (!isLID(senderNumber)) {
+          const formattedPhone = formatPhoneForDisplay(senderNumber);
+          const timestamp = Date.now();
+          const readTime = new Date(timestamp).toLocaleString("fr-FR");
+          
+          // Extraire un aperçu du message
+          const msgPreview = msg.message?.conversation || 
+                            msg.message?.extendedTextMessage?.text ||
+                            msg.message?.imageMessage?.caption ||
+                            msg.message?.videoMessage?.caption ||
+                            (msg.message?.audioMessage ? "🎵 Vocal" : "") ||
+                            (msg.message?.imageMessage ? "📷 Photo" : "") ||
+                            (msg.message?.videoMessage ? "🎬 Vidéo" : "") ||
+                            (msg.message?.stickerMessage ? "🎴 Sticker" : "") ||
+                            "📩 Message";
+          
+          // Vérifier si c'est une réponse à mon message
+          const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+          const isReply = !!quotedMsg;
+          
+          // Vérifier si on a envoyé un message à cette personne récemment (dans les 24h)
+          const pendingTime = spyData.pendingMessages[from];
+          const isFollowUp = pendingTime && (timestamp - pendingTime < 24 * 60 * 60 * 1000);
+          
+          // Stocker l'info
+          spyData.replies.unshift({
+            replier: senderNumber,
+            replierName: senderName,
+            replierJid: from,
+            timestamp: timestamp,
+            timeStr: readTime,
+            preview: msgPreview.slice(0, 50),
+            isDirectReply: isReply
+          });
+          
+          // Limiter les entrées
+          if (spyData.replies.length > spyData.maxEntries) {
+            spyData.replies = spyData.replies.slice(0, spyData.maxEntries);
+          }
+          
+          // Déterminer le type d'action
+          let actionType = "T'A ÉCRIT";
+          let actionDesc = "💬 _Nouveau message reçu_";
+          if (isReply) {
+            actionType = "RÉPONDU À TON MESSAGE";
+            actionDesc = "↩️ _Cette personne a RÉPONDU à ton message!_";
+          } else if (isFollowUp) {
+            actionType = "T'A RÉPONDU";
+            actionDesc = "💡 _Cette personne t'a écrit après ton message!_";
+          }
+          
+          // Utiliser getContactInfo pour avoir le nom enregistré
+          const contactInfo = getContactInfo(sender);
+          
+          console.log(`📨 [NOTIF] Envoi notification "${actionType}" de ${contactInfo} vers ${botNumber}`);
+          
+          try {
+            await hani.sendMessage(botNumber, {
+              text: `📖 ═══════════════════════════
     *${actionType}* ✅
 ═══════════════════════════
 
@@ -6257,19 +6253,19 @@ ${actionDesc}
 📞 wa.me/${senderNumber}
 
 ═══════════════════════════`
-          });
-          console.log(`✅ [NOTIF] Notification envoyée avec succès`);
-        } catch (notifErr) {
-          console.log(`❌ [NOTIF] Erreur envoi notification: ${notifErr.message}`);
+            });
+            console.log(`✅ [NOTIF] Notification envoyée avec succès`);
+          } catch (notifErr) {
+            console.log(`❌ [NOTIF] Erreur envoi notification: ${notifErr.message}`);
+          }
+          
+          console.log(`📖 [MESSAGE REÇU] ${senderName} (${formattedPhone}) - ${actionType}`);
+          
+          // Supprimer du pending si c'est une réponse/suivi
+          if (isReply || isFollowUp) {
+            delete spyData.pendingMessages[from];
+          }
         }
-        
-        console.log(`📖 [MESSAGE REÇU] ${senderName} (${formattedPhone}) - ${actionType}`);
-        
-        // Supprimer du pending si c'est une réponse/suivi
-        if (isReply || isFollowUp) {
-          delete spyData.pendingMessages[from];
-        }
-        } // Fermer le else (pas LID)
       }
       
       // Enregistrer les messages ENVOYÉS pour tracker les réponses
