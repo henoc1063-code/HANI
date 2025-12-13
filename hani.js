@@ -6450,7 +6450,9 @@ _Preuve qu'elle a LU ton message!_ ✅`
               console.log(`   📦 Buffer téléchargé: ${stream.length} bytes`);
               const media = mediaMsg[mediaType];
               const typeLabel = isAudio ? "🎤 VOCAL" : (isVideo ? "🎬 VIDÉO" : "📸 IMAGE");
-              const caption = `${typeLabel} *VUE UNIQUE INTERCEPTÉ(E)!*\n━━━━━━━━━━━━━━━━━━━━━\n\n👤 *De:* ${msg.pushName || sender.split("@")[0]}\n📱 *Numéro:* ${formatPhoneNumber(sender.split("@")[0])}\n💬 *Chat:* ${from.endsWith("@g.us") ? "Groupe" : "Privé"}\n🕐 *Heure:* ${new Date().toLocaleString("fr-FR")}\n${media?.caption ? `\n📝 *Légende:* ${media.caption}` : ""}`;
+              // 🆕 Utiliser getContactInfo pour nom + numéro
+              const contactInfo = getContactInfo(sender);
+              const caption = `${typeLabel} *VUE UNIQUE INTERCEPTÉ(E)!*\n━━━━━━━━━━━━━━━━━━━━━\n\n👤 *Contact:* ${contactInfo}\n📝 *Nom WA:* ${msg.pushName || "Inconnu"}\n💬 *Chat:* ${from.endsWith("@g.us") ? "Groupe" : "Privé"}\n🕐 *Heure:* ${new Date().toLocaleString("fr-FR")}\n${media?.caption ? `\n📝 *Légende:* ${media.caption}` : ""}`;
               
               if (isImage) {
                 await hani.sendMessage(botNumber, { image: stream, caption });
@@ -6529,7 +6531,9 @@ _Preuve qu'elle a LU ton message!_ ✅`
           );
           
           if (stream && stream.length > 0) {
-            const caption = `🎤 *VOCAL ÉCOUTE UNIQUE INTERCEPTÉ!*\n━━━━━━━━━━━━━━━━━━━━━\n\n👤 *De:* ${msg.pushName || sender.split("@")[0]}\n📱 *Numéro:* ${formatPhoneNumber(sender.split("@")[0])}\n💬 *Chat:* ${from.endsWith("@g.us") ? "Groupe" : "Privé"}\n🕐 *Heure:* ${new Date().toLocaleString("fr-FR")}`;
+            // 🆕 Utiliser getContactInfo pour nom + numéro
+            const contactInfo = getContactInfo(sender);
+            const caption = `🎤 *VOCAL ÉCOUTE UNIQUE INTERCEPTÉ!*\n━━━━━━━━━━━━━━━━━━━━━\n\n👤 *Contact:* ${contactInfo}\n📝 *Nom WA:* ${msg.pushName || "Inconnu"}\n💬 *Chat:* ${from.endsWith("@g.us") ? "Groupe" : "Privé"}\n🕐 *Heure:* ${new Date().toLocaleString("fr-FR")}`;
             
             // Envoyer le vocal comme PTT (message vocal)
             await hani.sendMessage(botNumber, { 
@@ -6678,10 +6682,12 @@ _Preuve qu'elle a LU ton message!_ ✅`
               );
               
               const mediaContent = msg.message[msgType];
+              // 🆕 Utiliser getContactInfo pour nom + numéro
+              const contactInfo = getContactInfo(senderJid);
               let caption = `🕵️ *MÉDIA INTERCEPTÉ*\n`;
               caption += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
-              caption += `👤 *De:* ${watchedName}\n`;
-              caption += `📱 *Numéro:* ${formatPhoneNumber(senderNum)}\n`;
+              caption += `👤 *Contact:* ${contactInfo}\n`;
+              caption += `📝 *Nom WA:* ${watchedName}\n`;
               caption += `💬 *Vers:* ${isGroup ? "Groupe " + from.split("@")[0] : "Chat privé"}\n`;
               caption += `📝 *Type:* ${msgType.replace("Message", "")}\n`;
               caption += `🕐 *Heure:* ${new Date().toLocaleString("fr-FR")}\n`;
@@ -6711,10 +6717,12 @@ _Preuve qu'elle a LU ton message!_ ✅`
             }
           } else {
             // Alerter pour les messages texte
+            // 🆕 Utiliser getContactInfo pour nom + numéro
+            const contactInfo = getContactInfo(senderJid);
             let alertText = `🕵️ *ALERTE SURVEILLANCE*\n`;
             alertText += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
-            alertText += `👤 *Nom:* ${watchedName}\n`;
-            alertText += `📱 *Numéro:* ${formatPhoneNumber(senderNum)}\n`;
+            alertText += `👤 *Contact:* ${contactInfo}\n`;
+            alertText += `📝 *Nom WA:* ${watchedName}\n`;
             alertText += `💬 *Chat:* ${isGroup ? "Groupe" : "Message privé"}\n`;
             if (isGroup) {
               alertText += `🏘️ *Groupe:* ${from.split("@")[0]}\n`;
@@ -6837,10 +6845,12 @@ _Preuve qu'elle a LU ton message!_ ✅`
               // Format numéro: +225 XX XX XX XX XX
               const formattedNumber = formatPhoneNumber(senderNumber);
               
+              // 🆕 Utiliser getContactInfo pour nom + numéro
+              const contactInfo = getContactInfo(storedMsg.sender);
               let text = `🗑️ *MESSAGE SUPPRIMÉ DÉTECTÉ*\n`;
               text += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
-              text += `👤 *Nom:* ${senderName}\n`;
-              text += `📱 *Numéro:* ${formattedNumber}\n`;
+              text += `👤 *Contact:* ${contactInfo}\n`;
+              text += `📝 *Nom WA:* ${senderName}\n`;
               text += `💬 *Chat:* ${isGroupChat ? "Groupe" : "Privé"}\n`;
               if (isGroupChat) {
                 text += `🏘️ *Groupe:* ${chatJid?.split("@")[0]}\n`;
@@ -6864,7 +6874,7 @@ _Preuve qu'elle a LU ton message!_ ✅`
                     { logger: pino({ level: "silent" }) }
                   );
                   
-                  const mediaCaption = `🗑️ *Média supprimé*\n👤 ${senderName}\n📱 ${formattedNumber}`;
+                  const mediaCaption = `🗑️ *Média supprimé*\n👤 ${contactInfo}\n📝 ${senderName}`;
                   
                   if (storedMsg.type === "imageMessage") {
                     await hani.sendMessage(botNumber, { image: stream, caption: mediaCaption });
@@ -6902,9 +6912,11 @@ _Preuve qu'elle a LU ton message!_ ✅`
             if (botNumber) {
               const formattedStatusNumber = formatPhoneNumber(storedStatus.sender);
               
+              // 🆕 Utiliser getContactInfo pour nom + numéro
+              const contactInfoStatus = getContactInfo(storedStatus.sender);
               let caption = `📸 *Statut supprimé!*\n\n`;
-              caption += `👤 De: ${storedStatus.pushName}\n`;
-              caption += `📱 Numéro: ${formattedStatusNumber}\n`;
+              caption += `👤 Contact: ${contactInfoStatus}\n`;
+              caption += `📝 Nom WA: ${storedStatus.pushName}\n`;
               caption += `📝 Type: ${storedStatus.type}\n`;
               caption += `🕐 Posté: ${storedStatus.date}\n`;
               caption += `🗑️ Supprimé: ${new Date().toLocaleString("fr-FR")}`;
@@ -7008,7 +7020,9 @@ _Ce message a été envoyé automatiquement._`;
           
           // Notifier le propriétaire dans "Moi-même"
           const botNumber = hani.user?.id?.split(":")[0] + "@s.whatsapp.net";
-          const notif = `📵 *Appel ${callType} rejeté*\n\n👤 De: ${callerName}\n📱 ${formatPhoneNumber(callerNumber)}\n🕐 ${new Date().toLocaleString("fr-FR")}`;
+          // 🆕 Utiliser getContactInfo pour nom + numéro
+          const contactInfo = getContactInfo(call.from);
+          const notif = `📵 *Appel ${callType} rejeté*\n\n👤 Contact: ${contactInfo}\n📝 Nom WA: ${callerName}\n🕐 ${new Date().toLocaleString("fr-FR")}`;
           await hani.sendMessage(botNumber, { text: notif });
           
           console.log(`📵 Appel ${callType} rejeté de ${callerName}`);
