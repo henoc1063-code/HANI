@@ -5819,25 +5819,7 @@ async function startBot() {
 
   hani.ev.on("creds.update", saveCredsWrapper);
 
-  // ────────── 📇 FONCTION POUR FORMATER UN NUMÉRO ──────────
-  const formatPhoneForDisplay = (number) => {
-    if (!number) return "Inconnu";
-    const clean = number.replace(/[^0-9]/g, '');
-    // Formater selon la longueur
-    if (clean.length === 12 && clean.startsWith("225")) {
-      // Côte d'Ivoire: +225 XX XX XX XX XX
-      return `+225 ${clean.slice(3,5)} ${clean.slice(5,7)} ${clean.slice(7,9)} ${clean.slice(9,11)} ${clean.slice(11)}`;
-    } else if (clean.length === 11 && clean.startsWith("33")) {
-      // France: +33 X XX XX XX XX
-      return `+33 ${clean.slice(2,3)} ${clean.slice(3,5)} ${clean.slice(5,7)} ${clean.slice(7,9)} ${clean.slice(9)}`;
-    } else if (clean.length >= 10) {
-      // Autre pays: +XXX XXX XXX XXX
-      return `+${clean.slice(0,3)} ${clean.slice(3,6)} ${clean.slice(6,9)} ${clean.slice(9)}`;
-    }
-    return `+${clean}`;
-  };
-
-  // ────────── 👁️ ESPIONNAGE: QUI VOIT MES STATUTS ──────────
+  // ────────── ️ ESPIONNAGE: QUI VOIT MES STATUTS ──────────
   // Capturer TOUTES les vues de statuts (même avec confirmations désactivées)
   hani.ev.on("message-receipt.update", async (updates) => {
     try {
@@ -6138,9 +6120,15 @@ async function startBot() {
       const msg = m.messages?.[0];
       if (!msg || !msg.message) return;
 
+      // � LOG: Message reçu
+      const fromJid = msg.key?.remoteJid;
+      const isFromMe = msg.key?.fromMe;
+      console.log(`📩 [MSG] Reçu de ${fromJid?.split("@")[0]} | fromMe=${isFromMe} | type=${m.type}`);
+
       // 🔒 ANTI-DOUBLON: Vérifier si ce message a déjà été traité
       const msgId = msg.key?.id;
       if (isMessageProcessed(msgId)) {
+        console.log(`📩 [MSG] Doublon ignoré: ${msgId}`);
         return; // Message déjà traité, on sort
       }
       markMessageProcessed(msgId); // Marquer comme traité
@@ -6149,6 +6137,8 @@ async function startBot() {
       const from = msg.key.remoteJid;
       const botNumber = hani.user?.id?.split(":")[0] + "@s.whatsapp.net";
       const senderName = msg.pushName || "Inconnu";
+      
+      console.log(`📩 [MSG] Traitement: sender=${sender?.split("@")[0]}, senderName=${senderName}, botNumber=${botNumber}`);
       
       // 🆕 ENREGISTRER LE CONTACT QUAND QUELQU'UN M'ENVOIE UN MESSAGE
       // Cela permet de sauvegarder son nom WhatsApp pour l'utiliser plus tard
